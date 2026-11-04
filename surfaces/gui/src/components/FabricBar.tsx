@@ -41,6 +41,7 @@ export function FabricBar() {
   useEffect(() => {
     if (!role) return;
     try { localStorage.setItem(ROLE_KEY, role); } catch { /* storage may be absent */ }
+    try { window.dispatchEvent(new Event("fabric:role")); } catch { /* no window */ }
   }, [role]);
 
   const doLogin = async () => {
