@@ -1,12 +1,15 @@
-import { useState } from "react";
 import { App } from "./App";
-import { FabricLogin } from "./components/FabricLogin";
-import { isFabricSignedIn } from "./fabric";
+import { FabricBar } from "./components/FabricBar";
 
-// The app gate: OpenWorker's chat/workspace is only reachable after the fabric login.
-// (Standalone local use is intentionally gone — every session runs against the governed kernel.)
+// Chat is the product; identity is a bar above it. Signing in sets the org (fixed domain)
+// and the person's role — the conversation runs inside that frame.
 export function Root() {
-  const [signedIn, setSignedIn] = useState(isFabricSignedIn());
-  if (!signedIn) return <FabricLogin onSignedIn={() => setSignedIn(true)} />;
-  return <App />;
+  return (
+    <div className="h-screen flex flex-col">
+      <FabricBar />
+      <div className="flex-1 min-h-0 app-shell">
+        <App />
+      </div>
+    </div>
+  );
 }

@@ -51,7 +51,7 @@ export interface FabricPersona {
 export interface FabricKit {
   name: string; label: string; description: string; agents: string[]; personas: string[];
 }
-export interface FabricOrg { id: string; name: string; tenant: string; entitled_personas: string[] }
+export interface FabricOrg { id: string; name: string; tenant: string; domain: string; entitled_personas: string[] }
 
 export const getFabricOrg = (): Promise<FabricOrg> => get<FabricOrg>("/api/org");
 export const getFabricPersonas = () =>
