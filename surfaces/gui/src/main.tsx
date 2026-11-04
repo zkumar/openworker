@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { App } from "./App";
+import { Root } from "./Root";
 import { initTheme } from "./theme";
 import { platformOS } from "./tauri";
 import { initI18n } from "./i18n";
@@ -22,7 +22,7 @@ window.addEventListener("drop", (e) => e.preventDefault());
 initI18n().finally(() => {
   ReactDOM.createRoot(document.getElementById("root")!).render(
     <React.StrictMode>
-      <App />
+      <Root />
     </React.StrictMode>,
   );
 });
