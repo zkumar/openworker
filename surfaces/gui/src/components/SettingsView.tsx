@@ -45,6 +45,7 @@ import { PanelHead } from "./IntegrationsView";
 import { ModelsTab } from "./ManageTabs";
 import { MemorySection } from "./MemorySection";
 import { PersonasTab } from "./PersonasTab";
+import { FabricEntry } from "./FabricEntry";
 import { SkillsTab } from "./SkillsTab";
 import { showPersonas } from "../flags";
 
@@ -55,7 +56,7 @@ import { showPersonas } from "../flags";
 // Models + Personas host the existing tab components inside the page shell (field re-skin to follow).
 // "appearance" is the General tab's stable key — callers deep-link with it, so the
 // rename (UX-021) changed only the label. "files" folded into General as a card.
-type SetTab = "appearance" | "models" | "context" | "skills" | "voice" | "memory" | "personas";
+type SetTab = "appearance" | "models" | "context" | "skills" | "voice" | "memory" | "personas" | "organization";
 
 const CARD = "rounded-xl2 border border-line bg-panel";
 const FIELD_LABEL = "text-[13px] font-medium text-ink";
@@ -78,6 +79,7 @@ const SET_TABS: {
   { key: "voice", labelKey: "settings.tab.voice", icon: "mic" },
   { key: "memory", labelKey: "settings.tab.memory", icon: "archive" },
   { key: "personas", labelKey: "settings.tab.personas", icon: "sparkle" },
+  { key: "organization", labelKey: "settings.tab.organization", icon: "sliders" },
 ];
 
 export function SettingsView({
@@ -150,6 +152,8 @@ export function SettingsView({
             <VoiceInputSection />
           ) : tab === "memory" ? (
             <MemorySection />
+          ) : tab === "organization" ? (
+            <OrganizationSection />
           ) : (
             <PersonasSection onOpenPersona={onOpenPersona} />
           )}
@@ -396,6 +400,19 @@ function VoiceInputSection() {
 // The Gallery entry point is GONE (owner 2026-08-21) — coworkers install from
 // GitHub / folder / zip only. GalleryModal stays in the tree for the gallery's
 // possible return as a first-class distribution surface, but nothing mounts it.
+function OrganizationSection() {
+  const { t } = useTranslation();
+  return (
+    <section>
+      <PanelHead title={t("settings.tab.organization")} sub={t("settings.organization_intro")} />
+      <p className="text-[13px] text-muted leading-relaxed max-w-[560px] mt-5 mb-4">
+        {t("settings.organization_desc")}
+      </p>
+      <FabricEntry />
+    </section>
+  );
+}
+
 function PersonasSection({ onOpenPersona }: { onOpenPersona?: (id: string) => void }) {
   const { t } = useTranslation();
   return (
