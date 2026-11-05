@@ -13,6 +13,8 @@ suspends the agent until that item is resolved.
 
 from __future__ import annotations
 
+import sqlite3
+
 import os
 
 import asyncio
@@ -101,43 +103,107 @@ class InboxItem:
 class InboxStore:
     def __init__(self, path: Optional[str | Path] = None) -> None:
         self.path = Path(path) if path else None
+        # Work items live in SQLite (WAL, transactional) next to the old JSON file. The JSON
+        # rewrite-per-step could be corrupted by a crash mid-write and had no cross-process
+        # safety at all; SQLite gives atomic commits and a single-writer lock.
+        self.db_path = (
+            self.path.with_name("inbox.sqlite") if self.path else None
+        )
         self._lock = threading.Lock()
         self._items: dict[str, InboxItem] = {}
         self._waiters: dict[str, asyncio.Event] = {}
         self._load()
 
     # -- persistence ------------------------------------------------------------
+    def _con(self) -> "sqlite3.Connection":
+        con = sqlite3.connect(str(self.db_path), timeout=15, check_same_thread=False)
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("PRAGMA synchronous=FULL")
+        return con
+
+    def _init_db(self) -> None:
+        with self._con() as con:
+            con.execute("""
+                CREATE TABLE IF NOT EXISTS inbox_item (
+                    id          TEXT PRIMARY KEY,
+                    session_id  TEXT NOT NULL,
+                    kind        TEXT NOT NULL,
+                    state       TEXT NOT NULL,
+                    created_at  TEXT NOT NULL,
+                    payload     TEXT NOT NULL
+                )""")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_item_session ON inbox_item(session_id)")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_item_state ON inbox_item(state)")
+
     def _load(self) -> None:
+        if not self.db_path:
+            return
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_db()
+        with self._con() as con:
+            rows = con.execute("SELECT payload FROM inbox_item").fetchall()
+        for (payload,) in rows:
+            try:
+                item = InboxItem(**json.loads(payload))
+            except Exception:
+                continue
+            self._items[item.id] = item
+        if self._items:
+            return                      # once SQLite holds items, it is authoritative
+        # First run on this machine: import a legacy JSON inbox once, then leave it as a backup.
         if self.path and self.path.is_file():
             try:
-                if (self.path.stat().st_mode & 0o077):     # pre-existing loose file: tighten it
+                if (self.path.stat().st_mode & 0o077):     # tighten a pre-existing loose file
                     os.chmod(self.path, 0o600)
             except OSError:
                 pass
-            data = json.loads(self.path.read_text(encoding="utf-8"))
+            try:
+                data = json.loads(self.path.read_text(encoding="utf-8"))
+            except Exception:
+                data = {}
             for raw in data.get("items", []):
-                item = InboxItem(**raw)
-                self._items[item.id] = item
+                try:
+                    self._items[InboxItem(**raw).id] = InboxItem(**raw)
+                except Exception:
+                    continue
+            if self._items:
+                self._save()
 
     def _save(self) -> None:
-        """Atomic, owner-only. Work items carry regulated personal data, so:
-        - write a temp file, fsync, then replace (a crash never leaves a half-written inbox);
-        - create with mode 0600 (a default umask gives 0644, i.e. readable by every local user).
+        """Commit every item in one transaction.
+
+        SQLite gives what the JSON rewrite could not: an all-or-nothing commit (a crash cannot
+        leave a truncated inbox) and file mode 0600 by default. Two processes can still race on
+        the same row — WAL keeps the database consistent, but true multi-writer correctness needs
+        row-level updates, which is a separate step.
         """
-        if not self.path:
+        if not self.db_path:
             return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-        payload = json.dumps({"items": [asdict(i) for i in self._items.values()]}, indent=2)
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        rows = [
+            (i.id, i.session_id, i.kind, i.state, i.created_at, json.dumps(asdict(i)))
+            for i in self._items.values()
+        ]
+        keep = tuple(self._items.keys())
+        with self._con() as con:
+            con.executemany(
+                """INSERT INTO inbox_item (id, session_id, kind, state, created_at, payload)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET
+                     session_id = excluded.session_id, kind = excluded.kind,
+                     state = excluded.state, created_at = excluded.created_at,
+                     payload = excluded.payload""",
+                rows,
+            )
+            if keep:
+                con.execute(
+                    f"DELETE FROM inbox_item WHERE id NOT IN ({','.join('?' * len(keep))})", keep
+                )
+            else:
+                con.execute("DELETE FROM inbox_item")
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(payload)
-                f.flush()
-                os.fsync(f.fileno())
-        finally:
-            os.chmod(tmp, 0o600)
-        tmp.replace(self.path)
+            os.chmod(self.db_path, 0o600)
+        except OSError:
+            pass
 
     # -- adding -----------------------------------------------------------------
     def add(

@@ -370,8 +370,9 @@ def create_app(manager: SessionManager) -> FastAPI:
         item = manager.inbox.get(item_id)
         if item is None:
             raise HTTPException(status_code=404, detail="unknown item")
-        data = item.data or {}
-        return data.get("receipt") or manager.build_receipt(item)
+        # Always derived from the item's CURRENT state: a stored snapshot can lag the run
+        # (e.g. a signature that arrives while the last step is still being appended).
+        return manager.build_receipt(item)
 
     @app.post("/v1/channels/{name}")
     def channel_ingest(name: str, body: dict) -> dict[str, Any]:

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Worklist } from "./Worklist";
 import { useTranslation } from "react-i18next";
 import {
   getConnectors,
@@ -57,7 +58,7 @@ export function InboxView({
 }: {
   onOpenSession: (sessionId: string, workspace: string, agent: string) => void;
 }) {
-  const [tab, setTab] = useState<"pending" | "configure">("pending");
+  const [tab, setTab] = useState<"pending" | "processed" | "configure">("pending");
   const [items, setItems] = useState<InboxItem[]>([]);
   const [personas, setPersonas] = useState<Persona[] | null>(null);
   const [routing, setRouting] = useState<string | null>(null); // e.g. "slack:C0123" or null
@@ -171,6 +172,12 @@ export function InboxView({
               )}
             </button>
             <button
+              className={TAB(tab === "processed")}
+              onClick={() => setTab("processed")}
+            >
+              Processed
+            </button>
+            <button
               className={TAB(tab === "configure")}
               data-testid="inbox-tab-configure"
               onClick={() => setTab("configure")}
@@ -184,7 +191,13 @@ export function InboxView({
             </button>
           </div>
 
-          {tab === "configure" ? (
+          {tab === "processed" ? (
+            <Worklist
+              onOpen={(item) =>
+                onOpenSession(item.session_id, item.session_workspace ?? "", item.session_agent ?? "")
+              }
+            />
+          ) : tab === "configure" ? (
             <InboxConfigure />
           ) : (
             <>

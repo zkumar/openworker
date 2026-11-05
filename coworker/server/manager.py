@@ -5182,6 +5182,8 @@ class SessionManager:
                      f"Signature: {(result.get('plan') or {}).get('signoff') or 'human sign-off'}."
                      if gated else f"{len(steps)} steps sealed.")
         self.inbox._save()          # noqa: SLF001
+        if (item.data or {}).get("signature"):
+            item.data = {**(item.data or {}), "awaiting_signoff": False}
         self.deliver_receipt(item_id)       # outbound: the run's JSON receipt
         record = self.session_store.load(session_id)
         if record is not None:
