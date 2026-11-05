@@ -4,9 +4,11 @@ import type { ApprovalDecision, Item } from "../types";
 import { shortArgs } from "./ApprovalCard";
 import { humanizeAsk, humanizeTool, type HumanLine } from "../humanize";
 import { Markdown } from "./Markdown";
-import { BoardWakeCard } from "./BoardWakeCard";
+import { TeamUpdateLine, TeamCreatedLine, foldTeamUpdates } from "./TeamUpdateLine";
+import type { MessageSource } from "../api";
 import { ConnectorMessageCard } from "./ConnectorMessageCard";
 import { Icon } from "./Icon";
+import { UnaskedSummary, unaskedTools } from "./UnaskedSummary";
 
 // Long user pastes swallow the transcript (owner ask 2026-07-30): clamp past a generous
 // threshold with a more…/less… toggle. Normal typed messages never see the control; the
@@ -23,7 +25,7 @@ function ClampedUserText({ text }: { text: string }) {
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="block ml-auto mt-1.5 text-[13px] font-medium opacity-75 hover:opacity-100"
+        className="block ml-auto mt-1.5 text-ui font-medium opacity-75 hover:opacity-100"
       >
         {open ? t("transcript.user_less") : t("transcript.user_more")}
       </button>
@@ -51,10 +53,10 @@ function BubbleMeta({ text, ts, align }: { text: string; ts?: number; align: "le
       .catch(() => {});
   };
   return (
-    <div className="relative h-0 select-none">
+    <div className="relative h-7 select-none">
       <div
         className={
-          "absolute top-1 flex items-center gap-1.5 text-[11px] leading-none text-faint whitespace-nowrap opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity " +
+          "absolute top-3 flex items-center gap-1.5 text-label leading-none text-faint whitespace-nowrap opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity " +
           (align === "right" ? "right-0" : "left-0")
         }
       >
@@ -164,10 +166,10 @@ function originChip(origin: string | undefined, note: string | undefined, grant?
   // Replayed user resolutions reuse the card-chip look (live sessions pair the card itself).
   if (origin === "user") {
     if (grant === "deny")
-      return <span className="text-[11px] px-1.5 rounded-full bg-dangerSoft text-danger shrink-0">{t("transcript.approval.declined")}</span>;
+      return <span className="text-label px-1.5 rounded-full bg-dangerSoft text-danger shrink-0">{t("transcript.approval.declined")}</span>;
     return (
       <span
-        className="text-[11px] px-1.5 rounded-full bg-okSoft text-ok shrink-0"
+        className="text-label px-1.5 rounded-full bg-okSoft text-ok shrink-0"
         title={
           (grant
             ? t("transcript.approval.approved_scope", { scope: grant.replace(/_/g, " ") })
@@ -190,12 +192,14 @@ function originChip(origin: string | undefined, note: string | undefined, grant?
     origin !== "reviewer" &&
     origin !== "bypass" &&
     origin !== "run_grant" &&
+    origin !== "gate_tier" &&
+    origin !== "readonly_tier" &&
     !TRUST_ORIGINS.has(origin ?? "")
   )
     return null;
   return (
     <span
-      className="text-[11px] text-faint shrink-0"
+      className="text-label text-faint shrink-0"
       data-testid="tool-approval-origin"
       title={
         origin === "reviewer"
@@ -208,7 +212,11 @@ function originChip(origin: string | undefined, note: string | undefined, grant?
                 ? t("transcript.approval.trusted_generic_title")
                 : origin === "run_grant"
                   ? t("transcript.approval.run_grant_title")
-                  : t("transcript.approval.bypass_title")
+                  : origin === "gate_tier"
+                    ? t("transcript.approval.gate_tier_title")
+                    : origin === "readonly_tier"
+                      ? t("transcript.approval.readonly_tier_title")
+                      : t("transcript.approval.bypass_title")
       }
     >
       {origin === "reviewer"
@@ -221,7 +229,11 @@ function originChip(origin: string | undefined, note: string | undefined, grant?
               ? t("transcript.approval.trusted_generic")
               : origin === "run_grant"
                 ? t("transcript.approval.run_grant")
-                : t("transcript.approval.bypassed")}
+                : origin === "gate_tier"
+                  ? t("transcript.approval.gate_tier")
+                  : origin === "readonly_tier"
+                    ? t("transcript.approval.readonly_tier")
+                    : t("transcript.approval.bypassed")}
     </span>
   );
 }
@@ -229,10 +241,10 @@ function originChip(origin: string | undefined, note: string | undefined, grant?
 function approvalChip(resolved: ApprovalDecision | undefined) {
   const t = getI18n().getFixedT(null, "translation");
   if (resolved === "deny")
-    return <span className="text-[11px] px-1.5 rounded-full bg-dangerSoft text-danger shrink-0">{t("transcript.approval.declined")}</span>;
+    return <span className="text-label px-1.5 rounded-full bg-dangerSoft text-danger shrink-0">{t("transcript.approval.declined")}</span>;
   return (
     <span
-      className="text-[11px] px-1.5 rounded-full bg-okSoft text-ok shrink-0"
+      className="text-label px-1.5 rounded-full bg-okSoft text-ok shrink-0"
       title={
         resolved
           ? t("transcript.approval.approved_scope", { scope: resolved.replace(/_/g, " ") })
@@ -246,7 +258,7 @@ function approvalChip(resolved: ApprovalDecision | undefined) {
 
 function LineText({ line }: { line: HumanLine }) {
   return (
-    <span className="min-w-0 text-[13px] leading-relaxed">
+    <span className="min-w-0 text-ui leading-relaxed">
       <span className="text-muted">{line.pre}</span>
       {line.obj && <span className="text-ink">{line.obj}</span>}
       {line.post && <span className="text-muted">{line.post}</span>}
@@ -273,7 +285,7 @@ function StepRow({
   return (
     <div>
       <div className="group flex items-baseline gap-2 px-2 py-0.5 rounded-lg hover:bg-paper" data-testid="turn-step">
-        <span className={"w-3.5 text-center text-[11px] shrink-0 " + (failed ? "text-danger" : running ? "text-accent" : "text-ok")}>
+        <span className={"w-3.5 text-center text-label shrink-0 " + (failed ? "text-danger" : running ? "text-accent" : "text-ok")}>
           {running ? <span className="spinner" data-testid="step-running" /> : "●"}
         </span>
         <LineText
@@ -293,7 +305,7 @@ function StepRow({
         {!approval && originChip(tool.approvalOrigin, tool.approvalNote, tool.approvalGrant)}
         {!!tool.standingRule && (
           <span
-            className="text-[11px] px-1.5 rounded-full bg-tealSoft text-tealInk shrink-0"
+            className="text-label px-1.5 rounded-full bg-tealSoft text-tealInk shrink-0"
             data-testid="tool-standing-rule"
             title={t("transcript.step.auto_allowed_tip", { name: tool.standingRule })}
           >
@@ -302,17 +314,17 @@ function StepRow({
         )}
         {!!tool.hidden && (
           <span
-            className="text-[11px] text-warnInk shrink-0"
+            className="text-label text-warnInk shrink-0"
             data-testid="tool-hidden-count"
             title={t("transcript.step.hidden_tip")}
           >
             {t("transcript.step.hidden_count_label", { n: tool.hidden })}
           </span>
         )}
-        {failed && <span className="text-[11px] text-danger shrink-0">{tool.status}</span>}
+        {failed && <span className="text-label text-danger shrink-0">{tool.status}</span>}
         {!running && (
           <button
-            className="ml-auto shrink-0 text-[11px] text-faint opacity-0 group-hover:opacity-100 cursor-pointer"
+            className="ml-auto shrink-0 text-label text-faint opacity-0 group-hover:opacity-100 cursor-pointer"
             onClick={() => setRaw((v) => !v)}
           >
             {t("transcript.step.raw")}
@@ -320,7 +332,7 @@ function StepRow({
         )}
       </div>
       {raw && (
-        <pre className="ml-8 mr-2 my-1 px-2.5 py-1.5 rounded-lg border border-line bg-paper font-mono text-[12px] leading-relaxed text-muted whitespace-pre-wrap break-words max-h-56 overflow-auto">
+        <pre className="ml-8 mr-2 my-1 px-2.5 py-1.5 rounded-lg border border-line bg-paper font-mono text-meta leading-relaxed text-muted whitespace-pre-wrap break-words max-h-56 overflow-auto">
           {`${tool.name}  ${shortArgs(tool.args)}`}
           {tool.preview ? `\n→ ${tool.preview.length > 1500 ? tool.preview.slice(0, 1500) + "\n…" : tool.preview}` : ""}
         </pre>
@@ -330,12 +342,12 @@ function StepRow({
           className="ml-8 mr-2 my-1 px-3 py-2 rounded-lg border border-line bg-dangerSoft/40"
           data-testid="reviewer-deny-card"
         >
-          <div className="text-[11px] font-medium text-danger">{t("transcript.reviewer.blocked")}</div>
-          <div className="text-[12px] text-ink mt-0.5">{tool.reviewerReason}</div>
-          <div className="text-[11px] text-faint mt-1">{t("transcript.reviewer.explain")}</div>
+          <div className="text-label font-medium text-danger">{t("transcript.reviewer.blocked")}</div>
+          <div className="text-meta text-ink mt-0.5">{tool.reviewerReason}</div>
+          <div className="text-label text-faint mt-1">{t("transcript.reviewer.explain")}</div>
           {tool.allowAnyway && onAllowAnyway && !overrideSent && (
             <button
-              className="mt-1.5 px-2.5 py-1 rounded-lg border border-line bg-panel text-[12px] text-ink hover:bg-paper"
+              className="mt-1.5 px-2.5 py-1 rounded-lg border border-line bg-panel text-meta text-ink hover:bg-paper"
               data-testid="reviewer-allow-anyway"
               onClick={() => {
                 setOverrideSent(true);
@@ -346,7 +358,7 @@ function StepRow({
             </button>
           )}
           {overrideSent && (
-            <div className="mt-1.5 text-[11px] text-ok" data-testid="reviewer-override-sent">
+            <div className="mt-1.5 text-label text-ok" data-testid="reviewer-override-sent">
               {t("transcript.reviewer.override_sent")}
             </div>
           )}
@@ -388,13 +400,13 @@ function TurnGroup({
   return (
     <details className="stepgroup" open={open}>
       <summary
-        className="stepgroup-head flex items-center gap-2 py-0.5 cursor-pointer select-none text-[13px] text-faint hover:text-muted"
+        className="stepgroup-head transcript-disclosure cursor-pointer select-none text-ui text-faint hover:text-muted"
         onClick={(e) => {
           e.preventDefault(); // drive open/closed from state, not the native toggle
           setUserToggle(!open);
         }}
       >
-        <span className={"chev inline-block transition-transform" + (open ? " rotate-90" : "")}>›</span>
+        <Icon name="chevronDown" size={12} />
         <span>
           <span>{running ? t("transcript.turn.running", { label: stepsLabel }) : stepsLabel}</span>
           {declined > 0 && (
@@ -424,12 +436,12 @@ function TurnGroup({
         <div className="ml-1.5 mt-1 pl-2 border-l-2 border-line flex flex-col gap-0.5">
           {rows.map((row, i) =>
             row.type === "narr" ? (
-              <div className="turn-narr px-2 py-1 text-[13px] text-muted max-w-[60ch]" key={i} data-testid="turn-narration">
+              <div className="turn-narr px-2 py-1 text-ui text-muted max-w-[60ch]" key={i} data-testid="turn-narration">
                 <Markdown text={row.text} />
               </div>
             ) : row.type === "ask" ? (
               <div className="flex items-baseline gap-2 px-2 py-0.5" key={i} data-testid="turn-ask">
-                <span className={"w-3.5 text-center text-[11px] shrink-0 " + (row.approval.resolved === "deny" ? "text-danger" : "text-ok")}>●</span>
+                <span className={"w-3.5 text-center text-label shrink-0 " + (row.approval.resolved === "deny" ? "text-danger" : "text-ok")}>●</span>
                 <LineText line={humanizeAsk(row.approval.name, row.approval.args)} />
                 {approvalChip(row.approval.resolved)}
               </div>
@@ -439,7 +451,7 @@ function TurnGroup({
           )}
           {streamingText && (
             <div
-              className="turn-narr px-2 py-1 text-[13px] text-muted max-w-[60ch]"
+              className="turn-narr px-2 py-1 text-ui text-muted max-w-[60ch]"
               data-testid="turn-live-stream"
             >
               <Markdown text={streamingText} />
@@ -472,6 +484,9 @@ interface Props {
   onUndoMemory?: (id: number, previous?: string) => void;
   // §8.4 "Allow anyway" on a reviewer-denied tool: one-shot exact-action override.
   onAllowAnyway?: (name: string, args: any) => void;
+  // OPE-238: open Activity on one tool call's audit rows (from the "changes made without
+  // asking" summary). Without it the summary shows no audit links.
+  onOpenAudit?: (callId: string) => void;
 }
 
 // The transcript index whose notice gets the Retry button: the tail error notice, looking
@@ -531,14 +546,26 @@ function McpNotice({
 }
 
 
-export function Transcript({ items, running, streamingText, onRetry, onOpenConnectors, onUndoMemory, onAllowAnyway }: Props) {
+export function Transcript({ items, running, streamingText, onRetry, onOpenConnectors, onUndoMemory, onAllowAnyway, onOpenAudit }: Props) {
   const { t } = useTranslation();
   // §33 grouping: a turn = the maximal run of assistant/tool/resolved-approval items between
   // breakers (user, connector, notices, plan/dir requests…). Trailing assistant texts are the
   // ANSWER and render as bubbles after the group; interior assistant texts are narration and
   // stay inside. A run with no activity at all is just bubbles (unchanged chat behavior).
-  const blocks: Array<{ turn: TurnItem[]; live?: boolean } | { item: Item; i: number }> = [];
+  const blocks: Array<
+    | { turn: TurnItem[]; live?: boolean }
+    | { unasked: ToolItem[] }
+    | { item: Item; i: number; sources?: MessageSource[]; steps?: Item[] }
+  > = [];
   let run: TurnItem[] = [];
+  // OPE-238: what ran auto-approved in the turn so far. A notice inside a turn (compaction,
+  // continuation, a saved memory) breaks the step group but not the turn: the block is
+  // emitted once, after the answer, when the next user message arrives or the turn is over.
+  let pendingUnasked: ToolItem[] = [];
+  const emitUnasked = () => {
+    if (pendingUnasked.length) blocks.push({ unasked: pendingUnasked });
+    pendingUnasked = [];
+  };
   const flush = (live = false) => {
     if (!run.length) return;
     const turn = [...run];
@@ -553,8 +580,10 @@ export function Transcript({ items, running, streamingText, onRetry, onOpenConne
     if (turn.some((it) => it.kind !== "assistant")) blocks.push({ turn, live });
     else turn.forEach((t) => blocks.push({ item: t, i: -1 }));
     answers.forEach((a) => blocks.push({ item: a, i: -1 }));
+    if (!live) pendingUnasked.push(...unaskedTools(turn));
   };
-  items.forEach((item, i) => {
+  foldTeamUpdates(items).forEach(({ item, sources, steps }) => {
+    const i = items.indexOf(item);
     if (item.kind === "tool" || item.kind === "assistant" || (item.kind === "approval" && item.resolved))
       run.push(item);
     else if (
@@ -567,15 +596,19 @@ export function Transcript({ items, running, streamingText, onRetry, onOpenConne
       return;
     } else {
       flush();
-      blocks.push({ item, i });
+      if (item.kind === "user" || item.kind === "connector") emitUnasked();
+      blocks.push({ item, i, sources, steps });
     }
   });
   flush(!!running);
+  if (!running) emitUnasked();
 
   const lastTurnIndex = blocks.reduce((acc, b, i) => ("turn" in b ? i : acc), -1);
   return (
     <div className="transcript">
       {blocks.map((block, bi) => {
+        if ("unasked" in block)
+          return <UnaskedSummary tools={block.unasked} onOpenAudit={onOpenAudit} key={bi} />;
         if ("turn" in block)
           return (
             <TurnGroup
@@ -592,14 +625,18 @@ export function Transcript({ items, running, streamingText, onRetry, onOpenConne
             // Board wakes get their own collapsed-by-default card — a report,
             // not a foreign message (owner ask 2026-08-16).
             return item.source.connector === "board" ? (
-              <BoardWakeCard source={item.source} key={bi} />
+              <TeamUpdateLine sources={block.sources || [item.source]} key={bi}>
+                {!!block.steps?.length && <Transcript items={block.steps} onApprove={() => {}} onAllowAnyway={onAllowAnyway} />}
+              </TeamUpdateLine>
             ) : (
               <ConnectorMessageCard source={item.source} key={bi} />
             );
+          case "teamcreated":
+            return <TeamCreatedLine key={bi} workers={item.workers} />;
           case "user":
             return (
               <div className="group self-end max-w-[78%] flex flex-col items-end" key={bi}>
-                <div className="bubble-user px-3.5 py-2.5 rounded-[14px_14px_4px_14px] bg-solid text-onSolid text-[14px] leading-relaxed whitespace-pre-wrap">
+                <div className="bubble-user px-3.5 py-2.5 rounded-[14px_14px_4px_14px] bg-solid text-onSolid text-body leading-relaxed whitespace-pre-wrap">
                   {item.attachments && item.attachments.length > 0 && (
                     <div className="bubble-attachments">
                       {item.attachments.map((a, i) =>

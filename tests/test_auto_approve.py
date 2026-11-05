@@ -178,12 +178,12 @@ def test_prompt_never_claims_shell_writes_are_pre_blocked():
     assert "your verdict is the only check" in text
 
 
-def test_history_is_clipped_hard_with_marker():
+def test_history_preserves_complete_user_messages():
     long = "paste " * 200
     rendered = reviewer_mod.render_history([{"text": long}])
     line = rendered.splitlines()[1]
-    assert len(line) < 250
-    assert "[truncated]" in line
+    assert long in line
+    assert "[truncated]" not in line
 
 
 def test_reply_tag_is_rendered():
@@ -470,10 +470,12 @@ class _FakeReviewer:
         self.verdicts = dict(verdicts)  # tool_name -> verdict str
         self.asked: list[tuple[str, dict]] = []
         self.provenance: list[str] = []
+        self.facts: list[list[str]] = []
 
-    async def review(self, *, request, history, tool_name, arguments, provenance=""):
+    async def review(self, *, request, history, tool_name, arguments, provenance="", facts=()):
         self.asked.append((tool_name, arguments))
         self.provenance.append(provenance)
+        self.facts.append(list(facts))
         verdict = self.verdicts.get(tool_name, "unsure")
         return reviewer_mod.Verdict(verdict, f"scripted {verdict}")
 
@@ -558,6 +560,37 @@ def test_reviewer_allow_runs_without_a_card(tmp_path):
     assert tool_msgs[-1]["_display"]["approval_note"] == "scripted allow"
     verdict_rows = [r for r in rows if r.get("stage") == "reviewer_verdict"]
     assert verdict_rows[0]["status"] == "allow"
+
+
+@pytest.mark.parametrize("preconsult", [True, False])
+@pytest.mark.parametrize("change", ["disable", "detach", "manual", "off-on"])
+def test_settings_change_during_review_cannot_apply_stale_allow(tmp_path, change, preconsult):
+    engine, rows, approvals = _engine(
+        tmp_path,
+        [_tool_turn(("run_shell", {"command": "pytest -q"})), AssistantTurn(text="done", finish_reason="stop")],
+    )
+
+    class ChangingReviewer:
+        async def review(self, **kwargs):
+            if change == "disable":
+                engine.reviewer_enabled = False
+            elif change == "detach":
+                engine.reviewer = None
+            elif change == "manual":
+                engine.permissions.mode = Mode.INTERACTIVE
+            else:
+                engine.reviewer_settings_epoch += 2
+            return reviewer_mod.Verdict("allow", "an obsolete verdict")
+
+    engine.reviewer = ChangingReviewer()
+    if not preconsult:
+        async def skip_preconsult(calls):
+            pass
+        engine._preconsult_reviewer = skip_preconsult
+    events = _run(engine)
+    assert approvals == ["run_shell"]
+    assert any(e.type == EventType.PERMISSION_REQUIRED for e in events)
+    assert not any(r.get("stage") == "reviewer_verdict" and r.get("status") == "allow" for r in rows)
 
 
 def test_reviewer_deny_blocks_with_terse_agent_message(tmp_path):
@@ -649,7 +682,7 @@ def test_allow_or_unsure_resets_the_denial_streak(tmp_path):
     )
 
     class _StreakReviewer(_FakeReviewer):
-        async def review(self, *, request, history, tool_name, arguments, provenance=""):
+        async def review(self, *, request, history, tool_name, arguments, provenance="", facts=()):
             self.asked.append((tool_name, arguments))
             verdict = "allow" if "ok" in str(arguments.get("command", "")) else "deny"
             return reviewer_mod.Verdict(verdict, f"scripted {verdict}")
@@ -779,7 +812,7 @@ def test_reviewer_sees_user_words_never_tool_results(tmp_path):
     captured = {}
 
     class _Capturing(_FakeReviewer):
-        async def review(self, *, request, history, tool_name, arguments, provenance=""):
+        async def review(self, *, request, history, tool_name, arguments, provenance="", facts=()):
             captured["request"] = request
             captured["history"] = history
             return await super().review(
@@ -864,19 +897,20 @@ def test_allow_anyway_cannot_unlock_a_hard_deny(tmp_path):
 
 
 def test_running_an_agent_written_script_tells_the_reviewer_so(tmp_path):
+    # Not setup.py: a build backend runs that one unnamed, so it is human-only (OPE-231).
     engine, rows, approvals = _engine(
         tmp_path,
         [
-            _tool_turn(("write_file", {"path": "setup.py", "content": "x"})),
-            _tool_turn(("run_shell", {"command": "python setup.py"})),
+            _tool_turn(("write_file", {"path": "make_report.py", "content": "x"})),
+            _tool_turn(("run_shell", {"command": "python make_report.py"})),
             AssistantTurn(text="done", finish_reason="stop"),
         ],
     )
     engine.reviewer = _FakeReviewer({"write_file": "allow", "run_shell": "allow"})
-    _run(engine, "write a setup script and run it")
+    _run(engine, "write a report script and run it")
 
     shell = [p for (name, _), p in zip(engine.reviewer.asked, engine.reviewer.provenance) if name == "run_shell"]
-    assert shell and "setup.py was created by the agent" in shell[0]
+    assert shell and "make_report.py was created by the agent" in shell[0]
     # Written (not downloaded) is a FACT, not a floor: the reviewer still decides, so
     # "write this script and run it" stays a single uninterrupted flow.
     assert approvals == []
@@ -1057,9 +1091,47 @@ def test_reviewer_follows_a_model_switch(tmp_path):
     assert engine.reviewer.model == "anthropic:claude-sonnet-5"
 
 
+def test_a_decision_model_reviewer_keeps_its_model_on_a_switch(tmp_path):
+    # With OpenAI Decisions or Jev as the reviewer, picking a model in a session raised
+    # AttributeError (DecisionReviewer.model has no setter) and closed the session's socket.
+    # Those reviewers judge with their own service's model, so a switch leaves it alone.
+    from coworker.decision_reviewer import build_decision_reviewer
+
+    engine, _rows, _approvals = _engine(tmp_path, [AssistantTurn(text="ok", finish_reason="stop")])
+    engine.reviewer = build_decision_reviewer("jev", api_key="test-key-not-real")
+    before = engine.reviewer.model
+    engine.messages.append({"role": "user", "content": "hi"})
+
+    engine.switch_model("openai:model-b")  # must not raise
+
+    assert engine.model == "openai:model-b"
+    assert engine.reviewer.model == before
+
+
 def test_model_switch_with_no_reviewer_attached_still_works(tmp_path):
     engine, _rows, _approvals = _engine(tmp_path, [AssistantTurn(text="ok", finish_reason="stop")])
     engine.reviewer = None
     engine.messages.append({"role": "user", "content": "hi"})
     engine.switch_model("anthropic:claude-sonnet-5")  # must not raise
     assert engine.model == "anthropic:claude-sonnet-5"
+
+
+def test_reviewer_caps_its_own_output_tokens():
+    """The verdict is one JSON line; an explicit cap keeps the call, on Anthropic, under
+    the SDK's non-streaming ceiling (a whole session of `unsure`
+    verdicts on 2026-09-16 came from the provider's 32k default tripping it)."""
+    seen: dict = {}
+
+    class _Recording(_Provider):
+        def complete(self, *, model, messages, tools=None, **settings):
+            seen.update(settings)
+            return super().complete(model=model, messages=messages, tools=tools)
+
+    rv = Reviewer(provider=_Recording(['{"verdict": "allow", "reason": "fine"}']), model="m")
+    assert _review(rv).verdict == "allow"
+    assert seen["max_tokens"] == reviewer_mod.REVIEWER_MAX_TOKENS
+    # Room to reason before answering (400 truncated hard calls into `unsure`, live
+    # 2026-09-17), yet under the SDK's non-streaming ceiling that made the cap necessary.
+    from coworker.providers.anthropic_provider import NONSTREAMING_TOKEN_CEILING
+
+    assert 2000 <= reviewer_mod.REVIEWER_MAX_TOKENS < NONSTREAMING_TOKEN_CEILING

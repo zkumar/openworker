@@ -14,6 +14,7 @@ import {
 } from "../api";
 import { openExternal } from "../tauri";
 import { PROVIDER_LOGOS, providerRank } from "./logos";
+import { OpenRouterSignIn } from "./OpenRouterSignIn";
 
 // The provider gallery ⇄ key form, shared by Onboarding step 1 (§39) and
 // Settings ▸ Models (UX-021) so the two can never drift apart visually. The hook
@@ -22,23 +23,49 @@ import { PROVIDER_LOGOS, providerRank } from "./logos";
 // and passes a testid prefix so both stay independently addressable in e2e.
 
 // Where a non-developer gets an API key — deep link + one line of instructions.
-export const KEY_HELP: Record<string, { url: string; label: string }> = {
+// Keyless local servers: one line on what the server is, and where to get it.
+const LOCAL_HELP: Record<string, { desc: string; link: string; url: string }> = {
+  ollama: { desc: "provider.no_key_needed_desc", link: "provider.install_ollama", url: "https://ollama.com/download" },
+  llamacpp: { desc: "provider.llamacpp_desc", link: "provider.install_llamacpp", url: "https://github.com/ggml-org/llama.cpp#quick-start" },
+  vllm: { desc: "provider.vllm_desc", link: "provider.install_vllm", url: "https://docs.vllm.ai/en/latest/getting_started/installation/" },
+  lmstudio: { desc: "provider.lmstudio_desc", link: "provider.install_lmstudio", url: "https://lmstudio.ai/download" },
+  jan: { desc: "provider.jan_desc", link: "provider.install_jan", url: "https://docs.jan.ai/desktop/api-server" },
+  docker: { desc: "provider.docker_desc", link: "provider.install_docker", url: "https://docs.docker.com/ai/model-runner/" },
+  mlx: { desc: "provider.mlx_desc", link: "provider.install_mlx", url: "https://github.com/ml-explore/mlx-lm/blob/main/mlx_lm/SERVER.md" },
+};
+
+export const KEY_HELP: Record<string, { url: string; label: string; labelKey?: string }> = {
   anthropic: { url: "https://console.anthropic.com/settings/keys", label: "console.anthropic.com" },
   openai: { url: "https://platform.openai.com/api-keys", label: "platform.openai.com" },
+  // The Azure portal's Azure OpenAI hub: pick the resource, then Keys and Endpoint.
+  azure: { url: "https://portal.azure.com/#view/Microsoft_Azure_ProjectOxford/CognitiveServicesHub/~/OpenAI", label: "portal.azure.com" },
+
   gemini: { url: "https://aistudio.google.com/apikey", label: "aistudio.google.com" },
   ark: { url: "https://console.byteplus.com/ark/region:ark+ap-southeast-1/apiKey", label: "console.byteplus.com" },
   "ark-agent-plan-cn": { url: "https://console.volcengine.com/ark/region:cn-beijing/openManagement?LLM=%7B%7D&advancedActiveKey=agentPlan", label: "console.volcengine.com" },
   openrouter: { url: "https://openrouter.ai/keys", label: "openrouter.ai" },
-  bedrock: { url: "https://console.aws.amazon.com/bedrock/home#/api-keys", label: "the AWS Bedrock console" },
+  orcarouter: { url: "https://www.orcarouter.ai/console", label: "orcarouter.ai" },
+  bedrock: { url: "https://console.aws.amazon.com/bedrock/home#/api-keys", label: "the AWS Bedrock console", labelKey: "misc.provider.bedrock_console" },
   fireworks: { url: "https://fireworks.ai/account/api-keys", label: "fireworks.ai" },
   together: { url: "https://api.together.xyz/settings/api-keys", label: "together.xyz" },
+  nebius: { url: "https://tokenfactory.nebius.com/project/api-keys", label: "tokenfactory.nebius.com" },
+  nvidia: { url: "https://build.nvidia.com/settings/api-keys", label: "build.nvidia.com" },
   zai: { url: "https://z.ai/manage-apikey/apikey-list", label: "z.ai" },
   kimi: { url: "https://platform.moonshot.ai/console/api-keys", label: "platform.moonshot.ai" },
   deepseek: { url: "https://platform.deepseek.com/api_keys", label: "platform.deepseek.com" },
   mistral: { url: "https://console.mistral.ai/api-keys", label: "console.mistral.ai" },
+  novita: { url: "https://novita.ai/settings/key-management", label: "novita.ai" },
   qwen: { url: "https://modelstudio.console.alibabacloud.com", label: "alibabacloud.com" },
   minimax: { url: "https://platform.minimax.io", label: "platform.minimax.io" },
   xai: { url: "https://console.x.ai", label: "console.x.ai" },
+  sambanova: { url: "https://cloud.sambanova.ai/apis", label: "cloud.sambanova.ai" },
+  atlascloud: { url: "https://www.atlascloud.ai/console/api-keys", label: "atlascloud.ai" },
+  groq: { url: "https://console.groq.com/keys", label: "console.groq.com" },
+  upstage: { url: "https://console.upstage.ai/api-keys", label: "console.upstage.ai" },
+  cerebras: { url: "https://cloud.cerebras.ai", label: "cloud.cerebras.ai" },
+  huggingface: { url: "https://huggingface.co/settings/tokens", label: "huggingface.co" },
+  cohere: { url: "https://dashboard.cohere.com/api-keys", label: "dashboard.cohere.com" },
+  siliconflow: { url: "https://cloud.siliconflow.com", label: "cloud.siliconflow.com" },
 };
 
 export type Verify = { state: "idle" | "testing" | "ok" | "error"; msg?: string };
@@ -54,7 +81,7 @@ export function ProviderMark({ name, title, size = 32 }: { name: string; title: 
       {url ? (
         <img src={url} alt="" style={{ width: size * 0.6, height: size * 0.6 }} />
       ) : (
-        <span className="text-[13px] font-semibold text-muted">{title[0]}</span>
+        <span className="text-ui font-semibold text-muted">{title[0]}</span>
       )}
     </span>
   );
@@ -145,7 +172,9 @@ export function useProviderSetup(opts?: { onSaved?: () => void }): ProviderSetup
     setFields(next);
     setDirty(!!draft && Object.values(draft).some(Boolean));
     setVerify({ state: "idle" });
-    setShowEndpoint(false);
+    // A custom provider cannot work without its endpoint, so keep that field
+    // visible instead of hiding it behind the built-ins' expert disclosure.
+    setShowEndpoint(!!p?.fields.find((f) => f.key === "base_url")?.required);
   };
 
   const backToGallery = () => {
@@ -163,14 +192,16 @@ export function useProviderSetup(opts?: { onSaved?: () => void }): ProviderSetup
   const runTestAndSave = async (): Promise<boolean> => {
     if (!sel) return false;
     setVerify({ state: "testing" });
-    const res = await verifyProvider(sel, fields).catch(() => ({ ok: false, error: t("provider.err_unreachable") }));
+    const res: { ok: boolean; error?: string; warning?: string } = await verifyProvider(sel, fields).catch(
+      () => ({ ok: false, error: t("provider.err_unreachable") }),
+    );
     if (!res.ok) {
       setVerify({ state: "error", msg: res.error || t("provider.err_couldnt_verify") });
       return false;
     }
     if (dirty || !info?.configured) await setProvider(sel, fields).catch(() => {});
     if (!info?.needs_key) setKeylessOk((s) => new Set(s).add(sel));
-    setVerify({ state: "ok" });
+    setVerify({ state: "ok", msg: res.warning });
     setDirty(false);
     setDrafts((d) => ({ ...d, [sel]: {} }));
     await refreshProviders();
@@ -179,11 +210,15 @@ export function useProviderSetup(opts?: { onSaved?: () => void }): ProviderSetup
     // the timeout would fire its stale closure (dirty/fields from before the save) and
     // re-stash the just-saved key as a draft — the state-restore bug (owner catch
     // 2026-07-19). This return path clears the draft unconditionally.
-    backTimer.current = window.setTimeout(() => {
-      setDrafts((d) => ({ ...d, [sel]: {} }));
-      setSel(null);
-      setVerify({ state: "idle" });
-    }, 900);
+    // A catalog-less gateway is still usable, but its warning contains the next action;
+    // leave the form open instead of making it disappear after the usual success animation.
+    if (!res.warning) {
+      backTimer.current = window.setTimeout(() => {
+        setDrafts((d) => ({ ...d, [sel]: {} }));
+        setSel(null);
+        setVerify({ state: "idle" });
+      }, 900);
+    }
     return true;
   };
 
@@ -228,24 +263,24 @@ export function useProviderSetup(opts?: { onSaved?: () => void }): ProviderSetup
       // The card keeps just the state — the account email truncated badly at card
       // width (owner-hit 2026-08-21); the detail pane shows who is signed in.
       if (p.signed_in)
-        return <span className="block text-[12px] text-ok font-medium truncate">{t("provider.signed_in")}</span>;
-      return <span className="block text-[12px] text-faint truncate">{t("provider.sign_in_with_plan")}</span>;
+        return <span className="block text-meta text-ok font-medium truncate">{t("provider.signed_in")}</span>;
+      return <span className="block text-meta text-faint truncate">{t("provider.sign_in_with_plan")}</span>;
     }
     if (p.configured && p.needs_key) {
       const used = o?.lastUsed ? relTime(p.last_used_at, t) : null;
       return (
-        <span className="block text-[12px] text-ok font-medium truncate">
+        <span className="block text-meta text-ok font-medium truncate">
           {t("provider.connected_ok")}{used ? <span className="text-muted font-normal">{t("provider.used_suffix", { time: used })}</span> : ""}
         </span>
       );
     }
     if (!p.needs_key)
       return (
-        <span className="block text-[12px] text-faint truncate">
+        <span className="block text-meta text-faint truncate">
           {keylessOk.has(p.name) ? <span className="text-ok font-medium">{t("provider.running")}</span> : t("provider.no_key_needed")}
         </span>
       );
-    return <span className="block text-[12px] text-faint truncate">{t("provider.not_set_up")}</span>;
+    return <span className="block text-meta text-faint truncate">{t("provider.not_set_up")}</span>;
   };
 
   return {
@@ -338,11 +373,11 @@ function OAuthSignIn({ info, tp, onChanged }: { info: ProviderInfo; tp: string; 
     return (
       <div className="mt-4">
         <div className="flex items-center gap-2.5 rounded-xl border border-okLine bg-okSoft px-3 py-2.5">
-          <span className="text-[13px] text-ink min-w-0 flex-1 truncate" data-testid={`${tp}-oauth-account`}>
+          <span className="text-ui text-ink min-w-0 flex-1 truncate" data-testid={`${tp}-oauth-account`}>
             {info.account ? t("provider.signed_in_as", { account: info.account }) : t("provider.signed_in")}
           </span>
           <button
-            className="shrink-0 rounded-lg border border-line bg-panel px-3 py-1.5 text-[13px] text-ink hover:border-lineStrong"
+            className="shrink-0 rounded-lg border border-line bg-panel px-3 py-1.5 text-ui text-ink hover:border-lineStrong"
             data-testid={`${tp}-oauth-signout`}
             onClick={async () => {
               await codexSignout().catch(() => {});
@@ -352,7 +387,7 @@ function OAuthSignIn({ info, tp, onChanged }: { info: ProviderInfo; tp: string; 
             {t("provider.sign_out")}
           </button>
         </div>
-        <p className="text-[12px] text-faint mt-2">
+        <p className="text-meta text-faint mt-2">
           {t("provider.oauth_plan_note")}
         </p>
       </div>
@@ -361,7 +396,7 @@ function OAuthSignIn({ info, tp, onChanged }: { info: ProviderInfo; tp: string; 
   return (
     <div className="mt-4">
       <button
-        className="rounded-lg border border-accent bg-accent px-4 py-2 text-[13px] font-medium text-white hover:brightness-105 disabled:opacity-40"
+        className="rounded-lg border border-accent bg-accent px-4 py-2 text-ui font-medium text-white hover:brightness-105 disabled:opacity-40"
         onClick={() => void start()}
         disabled={busy}
         data-testid={`${tp}-oauth-signin`}
@@ -369,7 +404,7 @@ function OAuthSignIn({ info, tp, onChanged }: { info: ProviderInfo; tp: string; 
         {busy ? t("provider.oauth_waiting") : t("provider.sign_in_chatgpt")}
       </button>
       {busy && (
-        <p className="text-[12px] text-faint mt-2">
+        <p className="text-meta text-faint mt-2">
           {t("provider.oauth_finish_browser")}
           {reopenUrl && (
             <>
@@ -384,7 +419,7 @@ function OAuthSignIn({ info, tp, onChanged }: { info: ProviderInfo; tp: string; 
           )}
         </p>
       )}
-      <div className="mt-2 min-h-[19px] text-[13px]">
+      <div className="mt-2 min-h-[19px] text-ui">
         {error && <span className="text-warnInk">{error}</span>}
       </div>
     </div>
@@ -396,11 +431,13 @@ export function ProviderCards({
   tp,
   gridClass = "grid grid-cols-2 gap-2.5",
   lastUsed = false,
+  onAddCustom,
 }: {
   ps: ProviderSetupState;
   tp: string; // testid prefix ("ob" onboarding, "set" settings)
   gridClass?: string;
   lastUsed?: boolean;
+  onAddCustom?: () => void;
 }) {
   const card =
     "flex items-center gap-2.5 rounded-xl border border-line bg-panel px-3 py-2.5 text-left hover:border-lineStrong transition-colors";
@@ -415,12 +452,25 @@ export function ProviderCards({
         >
           <ProviderMark name={p.name} title={p.title} />
           <span className="min-w-0 flex-1">
-            <span className="block text-[13px] font-semibold leading-tight truncate">{p.title}</span>
+            <span className="block text-ui font-semibold leading-tight truncate">{p.title}</span>
             {ps.statusFor(p, { lastUsed })}
           </span>
-          <span className="text-faint text-[14px]">›</span>
+          <span className="text-faint text-body">›</span>
         </button>
       ))}
+      {onAddCustom && (
+        <button
+          className={card + " border-dashed text-muted hover:text-ink"}
+          data-testid={`${tp}-provider-custom-add`}
+          onClick={onAddCustom}
+        >
+          <span className="rounded-lg border border-line grid place-items-center shrink-0 text-[20px]" style={{ width: 32, height: 32 }}>
+            +
+          </span>
+          <span className="min-w-0 flex-1 text-[13px] font-semibold">Custom provider</span>
+          <span className="text-faint text-[14px]">›</span>
+        </button>
+      )}
     </div>
   );
 }
@@ -432,16 +482,24 @@ export function ProviderForm({
   ps,
   tp,
   footer,
+  status,
+  blurb,
+  guided,
 }: {
   ps: ProviderSetupState;
   tp: string;
   footer?: ReactNode;
+  // A guided setup (llama.cpp on a Mac, UX-057) replaces the status line, the blurb and
+  // the fields; the footer stays.
+  status?: ReactNode;
+  blurb?: string;
+  guided?: ReactNode;
 }) {
   const { t } = useTranslation();
   const { info, sel } = ps;
-  const label = "block text-[12px] text-muted mt-3 mb-1";
+  const label = "block text-meta text-muted mt-3 mb-1";
   const input =
-    "w-full px-3 py-2 rounded-lg border bg-panel text-[13px] outline-none focus:border-accent";
+    "w-full px-3 py-2 rounded-lg border bg-panel text-ui outline-none focus:border-accent";
   const fieldsAll = info?.fields || [];
   const keyed = fieldsAll.some((x) => x.secret);
   // Cloud providers declare a segmented auth-method choice; the selected method's
@@ -478,7 +536,7 @@ export function ProviderForm({
           />
           {ps.fieldSaved === f.key && (
             <span
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-[11px] font-medium text-ok bg-okSoft rounded-full px-2 py-0.5 pointer-events-none"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-label font-medium text-ok bg-okSoft rounded-full px-2 py-0.5 pointer-events-none"
               data-testid={`${tp}-field-saved-${f.key}`}
             >
               {t("provider.saved_pill")}
@@ -487,7 +545,7 @@ export function ProviderForm({
           {/* §39: state lives IN the field — no status lines below. */}
           {ps.savedState && testable && (
             <span
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-[11px] font-medium text-ok bg-okSoft rounded-full px-2 py-0.5 pointer-events-none"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-label font-medium text-ok bg-okSoft rounded-full px-2 py-0.5 pointer-events-none"
               data-testid={`${tp}-saved-pill`}
             >
               {info?.needs_key ? t("provider.tested_saved_pill") : t("provider.detected_pill")}
@@ -496,7 +554,7 @@ export function ProviderForm({
         </div>
         {testable && (
           <button
-            className="px-4 rounded-lg border border-line text-[13px] font-medium text-ink hover:border-lineStrong shrink-0 disabled:opacity-40"
+            className="px-4 rounded-lg border border-line text-ui font-medium text-ink hover:border-lineStrong shrink-0 disabled:opacity-40"
             onClick={() => ps.runTestAndSave()}
             disabled={ps.verify.state === "testing" || (!ps.secretFilled && !ps.credentialed)}
             data-testid={`${tp}-test`}
@@ -505,27 +563,33 @@ export function ProviderForm({
           </button>
         )}
       </div>
-      {f.help && <p className="text-[12px] text-faint mt-1">{f.help}</p>}
+      {f.help && <p className="text-meta text-faint mt-1">{f.help}</p>}
     </div>
   );
 
   return (
     <div>
-      <button className="text-[13px] text-muted hover:text-ink" onClick={ps.backToGallery} data-testid={`${tp}-back`}>
+      <button className="text-ui text-muted hover:text-ink" onClick={ps.backToGallery} data-testid={`${tp}-back`}>
         {t("provider.all_providers")}
       </button>
       <div className="flex items-center gap-3 mt-3 mb-1">
         <ProviderMark name={info?.name || ""} title={info?.title || ""} size={36} />
         <span className="min-w-0">
-          <span className="block text-[14px] font-semibold leading-tight">{info?.title}</span>
-          {info ? ps.statusFor(info) : null}
+          <span className="block text-body font-semibold leading-tight">{info?.title}</span>
+          {status ?? (info ? ps.statusFor(info) : null)}
         </span>
       </div>
-      {info?.blurb && <p className="text-[12px] text-faint mt-1">{info.blurb}</p>}
+      {(blurb ?? info?.blurb) && <p className="text-meta text-faint mt-1">{blurb ?? info?.blurb}</p>}
+      {guided}
 
-      {info?.auth === "oauth" && <OAuthSignIn info={info} tp={tp} onChanged={ps.refreshProviders} />}
+      {info?.auth === "oauth" &&
+        (info.name === "openrouter-account" ? (
+          <OpenRouterSignIn tp={tp} onChanged={ps.refreshProviders} />
+        ) : (
+          <OAuthSignIn info={info} tp={tp} onChanged={ps.refreshProviders} />
+        ))}
 
-      {fieldsAll
+      {!guided && fieldsAll
         .filter(
           (f) =>
             !f.show_when &&
@@ -553,7 +617,7 @@ export function ProviderForm({
                   role="radio"
                   aria-checked={active}
                   className={
-                    "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] whitespace-nowrap transition-colors " +
+                    "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-ui whitespace-nowrap transition-colors " +
                     (active
                       ? "bg-panel text-ink font-medium shadow-sm ring-1 ring-line"
                       : "text-muted hover:text-ink")
@@ -563,7 +627,7 @@ export function ProviderForm({
                 >
                   {c.label}
                   {c.tag && (
-                    <span className="text-[9.5px] font-semibold uppercase tracking-wide text-accent bg-accentSoft rounded-full px-1.5 py-px">
+                    <span className="text-[9.5px] font-medium text-accent bg-accentSoft rounded-full px-1.5 py-px">
                       {c.tag}
                     </span>
                   )}
@@ -573,29 +637,29 @@ export function ProviderForm({
           </div>
 
           <div className="mt-2.5 rounded-xl border border-line bg-paper/60 px-4 pb-3.5 pt-3">
-            {selected?.desc && <p className="text-[12px] text-muted">{selected.desc}</p>}
+            {selected?.desc && <p className="text-meta text-muted">{selected.desc}</p>}
             {selected?.command && (
               <button
-                className="mt-2.5 inline-flex items-center gap-2 rounded-lg border border-line bg-panel px-2.5 py-1.5 text-[12px] font-mono text-ink hover:border-lineStrong"
+                className="mt-2.5 inline-flex items-center gap-2 rounded-lg border border-line bg-panel px-2.5 py-1.5 text-meta font-mono text-ink hover:border-lineStrong"
                 onClick={() => void navigator.clipboard?.writeText(selected.command || "")}
                 title={t("provider.copy_command")}
                 data-testid={`${tp}-cmd-copy`}
               >
                 {selected.command}
-                <span className="font-sans text-[11px] text-faint">⧉</span>
+                <span className="font-sans text-label text-faint">⧉</span>
               </button>
             )}
             {methodFields.map((f) => fieldRow(f, false))}
             <div className="mt-3.5 flex items-center justify-between gap-3 border-t border-line pt-3">
               {ps.savedState ? (
-                <span className="text-[12px] font-medium text-ok" data-testid={`${tp}-saved-pill`}>
+                <span className="text-meta font-medium text-ok" data-testid={`${tp}-saved-pill`}>
                   {t("provider.tested_saved_pill")}
                 </span>
               ) : (
-                <span className="text-[12px] text-faint">{t("provider.test_save_hint")}</span>
+                <span className="text-meta text-faint">{t("provider.test_save_hint")}</span>
               )}
               <button
-                className="shrink-0 rounded-lg border border-accent bg-accent px-4 py-1.5 text-[13px] font-medium text-white hover:brightness-105 disabled:opacity-40"
+                className="shrink-0 rounded-lg border border-accent bg-accent px-4 py-1.5 text-ui font-medium text-white hover:brightness-105 disabled:opacity-40"
                 onClick={() => ps.runTestAndSave()}
                 disabled={ps.verify.state === "testing"}
                 data-testid={`${tp}-test`}
@@ -608,25 +672,25 @@ export function ProviderForm({
       )}
 
       {info?.needs_key && KEY_HELP[sel] && (
-        <p className="text-[12px] text-faint mt-2">
+        <p className="text-meta text-faint mt-2">
           {t("provider.no_key_yet")}{" "}
           <button
             className="text-muted underline decoration-line underline-offset-2 hover:text-ink"
             onClick={() => openExternal(KEY_HELP[sel].url)}
           >
-            {t("provider.create_key_at", { label: KEY_HELP[sel].label })} ↗
+            {t("provider.create_key_at", { label: KEY_HELP[sel].labelKey ? t(KEY_HELP[sel].labelKey) : KEY_HELP[sel].label })} ↗
           </button>{" "}
           {t("provider.takes_a_minute")}
         </p>
       )}
-      {info && !info.needs_key && info.auth !== "oauth" && (
-        <p className="text-[12px] text-faint mt-2">
-          {t("provider.no_key_needed_desc")}{" "}
+      {!guided && info && !info.needs_key && info.auth !== "oauth" && LOCAL_HELP[info.name] && (
+        <p className="text-meta text-faint mt-2">
+          {t(LOCAL_HELP[info.name].desc)}{" "}
           <button
             className="text-muted underline decoration-line underline-offset-2 hover:text-ink"
-            onClick={() => openExternal("https://ollama.com/download")}
+            onClick={() => openExternal(LOCAL_HELP[info.name].url)}
           >
-            {t("provider.install_ollama")} ↗
+            {t(LOCAL_HELP[info.name].link)} ↗
           </button>
         </p>
       )}
@@ -636,12 +700,12 @@ export function ProviderForm({
           (owner calls 2026-07-18 + 2026-07-19). */}
       {(() => {
         const keyed = (info?.fields || []).some((x) => x.secret);
-        const ep = keyed ? (info?.fields || []).find((f) => f.key === "base_url") : undefined;
+        const ep = keyed && !guided ? (info?.fields || []).find((f) => f.key === "base_url") : undefined;
         if (!ep) return null;
         if (!ps.showEndpoint)
           return (
             <button
-              className="block self-start text-[13px] text-muted hover:text-ink mt-4"
+              className="block self-start text-ui text-muted hover:text-ink mt-4"
               onClick={() => ps.setShowEndpoint(true)}
               data-testid={`${tp}-endpoint-link`}
             >
@@ -663,21 +727,22 @@ export function ProviderForm({
               />
               {ps.fieldSaved === ep.key && (
                 <span
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-[11px] font-medium text-ok bg-okSoft rounded-full px-2 py-0.5 pointer-events-none"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-label font-medium text-ok bg-okSoft rounded-full px-2 py-0.5 pointer-events-none"
                   data-testid={`${tp}-field-saved-${ep.key}`}
                 >
                   {t("provider.saved_pill")}
                 </span>
               )}
             </div>
-            {ep.help && <p className="text-[12px] text-faint mt-1">{ep.help}</p>}
+            {ep.help && <p className="text-meta text-faint mt-1">{ep.help}</p>}
           </div>
         );
       })()}
 
       {/* Error line: fixed height so failures never reflow the form. */}
-      <div className="mt-3 min-h-[19px] text-[13px]">
+      <div className="mt-3 min-h-[19px] text-ui">
         {ps.verify.state === "error" && <span className="text-warnInk">{ps.verify.msg}</span>}
+        {ps.verify.state === "ok" && ps.verify.msg && <span className="text-muted">{ps.verify.msg}</span>}
       </div>
       {info?.auth === "oauth" ? null : footer}
     </div>
