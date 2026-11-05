@@ -218,7 +218,9 @@ class SessionManager:
             base = state_dir()
         base.mkdir(parents=True, exist_ok=True)
 
-        self._active_runs: set[str] = set()   # inbox ids this process owns right now
+        self._active_runs: set[str] = set()
+        from coworker.server.runstore import RunStore
+        self.runs = RunStore(base / "runs.sqlite")   # inbox ids this process owns right now
         self.memory_store: MemoryStore = SQLiteMemoryStore(base / "coworker.db")
         # MEMORY-SPEC §4.3/§6: the on/off switch + the user's standing rules. Settings-
         # level, outside the memory table; read at engine build time.
@@ -5118,6 +5120,7 @@ class SessionManager:
             body="The governed run is executing…",
             data={"channel": item.channel, "record": item.record, "running": True, "steps": []},
         )
+        self.runs.begin(record.id, session_id, item.record)
         self._active_runs.add(record.id)     # owned by this process — the sweeper must skip it
         return session_id, record.id
 
@@ -5126,6 +5129,7 @@ class SessionManager:
         item = self.inbox.get(item_id)
         if item is None:
             return
+        self.runs.set_fabric_run(item_id, fabric_run, agent)
         item.data = {**(item.data or {}), "fabric_run": fabric_run, "agent": agent}
         self.inbox._save()          # noqa: SLF001
 
@@ -5139,6 +5143,7 @@ class SessionManager:
         steps.append(step)
         item.data = {**data, "steps": steps, "envelopes": len(steps)}
         self.inbox._save()          # noqa: SLF001 — same package, single writer
+        self.runs.touch(item_id)    # heartbeat: a healthy long run is not reclaimed
 
     def channel_run_finish(self, item_id: str, result: dict[str, Any], session_id: str) -> None:
         """Close the run: publish the decision, the plan and the gate (or seal it if ungated)."""
@@ -5160,6 +5165,7 @@ class SessionManager:
         item.title = (f"Sign off: {result.get('agent')} → {decided} · {ref}" if gated
                       else f"{label} · {decided}")
         self._active_runs.discard(item_id)
+        self.runs.finish(item_id, "gate" if gated else "sealed")
         item.body = (f"{len(steps)} steps sealed. "
                      f"Signature: {(result.get('plan') or {}).get('signoff') or 'human sign-off'}."
                      if gated else f"{len(steps)} steps sealed.")
@@ -5181,18 +5187,25 @@ class SessionManager:
 
         from coworker.dispatch import CapabilityRouter
 
-        for it in self.inbox.list():
+        for job in self.runs.due():
+            it_id = job["run_key"]
+            if it_id in self._active_runs:
+                continue     # busy here, not interrupted
+            it = self.inbox.get(it_id)
+            if it is None:
+                continue
+            generation = self.runs.claim(it_id, job["generation"])
+            if generation is None:
+                continue     # another writer got there first
             data = it.data or {}
-            if not data.get("running") or it.id in self._active_runs:
-                continue     # running here already: not interrupted, just busy
 
-            def work(item=it, data=data):
-                record = data.get("record") or {}
-                fabric_run = data.get("fabric_run")
+            def work(item=it, data=data, fabric_run=job["fabric_run"], agent=job["agent"],
+                     record=job["record"]):
+                record = record or data.get("record") or {}
                 try:
                     router = CapabilityRouter()
                     if fabric_run:
-                        result = router.resume(fabric_run, record, agent=data.get("agent"),
+                        result = router.resume(fabric_run, record, agent=agent,
                                                on_step=lambda s: self.channel_append_step(item.id, s))
                     else:
                         result = router.route(record,
@@ -5208,7 +5221,9 @@ class SessionManager:
         if item is None:
             return
         self._active_runs.discard(item_id)
-        item.data = {**(item.data or {}), "running": False, "error": error}
+        state = self.runs.fail(item_id, error)      # backoff decides retry vs terminal
+        item.data = {**(item.data or {}), "running": False, "error": error,
+                     "retrying": state == "dispatched"}
         item.title = "Run failed"
         item.body = error
         self.inbox._save()          # noqa: SLF001

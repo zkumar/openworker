@@ -195,7 +195,12 @@ def create_app(manager: SessionManager) -> FastAPI:
     def _sweep_interrupted() -> None:
         import time
         time.sleep(1.0)                     # let the port bind and settings load first
-        manager.resume_interrupted_runs()
+        while True:
+            try:
+                manager.resume_interrupted_runs()   # restart recovery AND retry after backoff
+            except Exception:
+                pass
+            time.sleep(5.0)
     __import__("threading").Thread(target=_sweep_interrupted, daemon=True).start()
     api_token = os.environ.get("COWORKER_API_TOKEN", "")
     tokenless_paths = {

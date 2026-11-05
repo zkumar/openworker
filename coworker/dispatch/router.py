@@ -86,7 +86,31 @@ class CapabilityRouter:
 
     def resume(self, run_id: str, record: dict, *, agent: str | None = None,
                on_step: Callable[[dict], None] | None = None) -> dict[str, Any]:
-        """Re-drive a run that outlived its request: pursue resumes from the sealed prefix."""
+        """Re-drive a run that outlived its request — WITHOUT advancing it twice.
+
+        Resuming must be idempotent: if the run already parked at a gate, or already finished,
+        pursuing again would append duplicate steps and drift the decision. So look first.
+        """
+        gates = self._get(f"/api/runs/{run_id}/pending-signoff").get("gates") or []
+        finished = False
+        try:
+            for s in self._get("/api/sessions").get("sessions", []):
+                if s.get("session_id") == run_id:
+                    finished = s.get("status") == "complete"
+                    break
+        except Exception:
+            finished = False
+        if gates or finished:
+            chain = self._get(f"/api/runs/{run_id}/chain")
+            steps = [{"type": e.get("type"), "summary": e.get("summary"),
+                      "state_before": e.get("state_before"), "state_after": e.get("state_after"),
+                      "sha256": e.get("sha256")} for e in (chain.get("envelopes") or [])]
+            return {"framed": True, "agent": agent, "awaiting_signoff": bool(gates), "gates": gates,
+                    "plan": {}, "steps": steps, "envelopes": len(steps),
+                    "decision": (gates[-1]["state_after"] if gates
+                                 else (steps[-1]["state_after"] if steps else None)),
+                    "session_id": run_id, "already": "gate" if gates else "complete"}
+
         stop = threading.Event()
         if on_step is not None:
             threading.Thread(target=self._watch, args=(run_id, on_step, stop), daemon=True).start()
