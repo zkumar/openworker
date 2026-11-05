@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import tempfile
 import re
 import shlex
 import shutil
@@ -5034,13 +5035,18 @@ class SessionManager:
         also parks an approval in the Inbox — the human sign-off the card advertises.
         """
         session_id = f"ch_{uuid.uuid4().hex[:12]}"
+        # a session must have a real workspace or the UI refuses to open it
+        store_path = getattr(self.memory_store, "path", ":memory:")
+        base = Path(store_path).parent if store_path != ":memory:" else Path(tempfile.gettempdir())
+        workspace = self.default_workspace or str(base / "channel-workspaces" / session_id)
+        Path(workspace).mkdir(parents=True, exist_ok=True)
         record = item.record
         decided = result.get("decision")
         agent = result.get("agent")
         self.session_store.save(
             SessionRecord(
                 session_id=session_id,
-                workspace=self.default_workspace or "",
+                workspace=workspace,
                 model=self.model,
                 mode=self.mode.value,
                 messages=[
