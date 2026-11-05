@@ -53,6 +53,7 @@ import { fullPersonaName, isProjectScoped } from "./personaScope";
 import { baseName } from "./paths";
 import { itemsFromMessages } from "./itemsFromMessages";
 import { fabricUser } from "./fabric";
+import { RunPanel, type RunData } from "./components/RunPanel";
 import { addTurnUsage, emptyUsage, usageFromMessages } from "./usage";
 import { streamMode } from "./streamGate";
 import { InboxItemCard, approvalItemFromParked } from "./components/InboxItemCard";
@@ -2170,6 +2171,16 @@ export function App() {
                   // decisions resolve through the same server-validated vocabulary as the
                   // live path. Everything else keeps the Inbox card.
                   (() => {
+                    const run = sessionInbox[0].data as RunData | undefined;
+                    if (run?.record) {
+                      return (
+                        <RunPanel
+                          data={run}
+                          pending
+                          onDecide={(d) => void resolveSessionInbox(sessionInbox[0].id, d)}
+                        />
+                      );
+                    }
                     const parked = approvalItemFromParked(sessionInbox[0]);
                     const d = sessionInbox[0].data;
                     return parked ? (
@@ -2191,19 +2202,7 @@ export function App() {
                     );
                   })()
                 ) : signedItem ? (
-                  (() => {
-                    const sig = ((signedItem.data as { signature?: Record<string, string> })?.signature) || {};
-                    return (
-                      <div className="bubble-assistant" data-testid="approval-signed">
-                        <div className="who">APPROVAL — SIGNED</div>
-                        <div>
-                          ✓ Signed by <strong>{sig.approver}</strong> at {sig.at} — gate{" "}
-                          {sig.state_before} → {sig.state_after} ({sig.signoff}) sealed
-                          {sig.sha256 ? `, evidence ${sig.sha256.slice(0, 12)}…` : ""}.
-                        </div>
-                      </div>
-                    );
-                  })()
+                  <RunPanel data={signedItem.data as RunData} pending={false} onDecide={() => {}} />
                 ) : undefined
               }
             />

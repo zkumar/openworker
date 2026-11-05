@@ -5049,17 +5049,10 @@ class SessionManager:
                 workspace=workspace,
                 model=self.model,
                 mode=self.mode.value,
-                messages=[
-                    {"role": "user",
-                     "content": f"Work item received from channel: {item.channel}\n\n"
-                                f"{json.dumps(record, indent=2)}"},
-                    {"role": "assistant",
-                     "content": (f"Routed to `{agent}` (chosen from its capability card) — "
-                                 f"**{decided}** after {result.get('envelopes')} sealed steps."
-                                 + (f" Next: `{result['plan']['signoff']}` sign-off."
-                                    if result.get("human_gate_required") and result.get("plan", {}).get("signoff")
-                                    else ""))},
-                ],
+                # One origin line keeps the session from showing the starter empty-state; the
+                # RunPanel below is the surface for the record, the process and the gate.
+                messages=[{"role": "user",
+                           "content": f"Work item received from channel: {item.channel}"}],
                 title=f"{item.channel}: {decided}",
                 agent="code",
                 origin=item.channel,
@@ -5074,7 +5067,12 @@ class SessionManager:
                       f"Signature: {result.get('plan', {}).get('signoff') or 'human sign-off'}."),
                 data={"agent": agent, "decision": decided, "session_id": session_id,
                       "fabric_run": result.get("session_id"),
-                      "awaiting_signoff": result.get("awaiting_signoff")},
+                      "awaiting_signoff": result.get("awaiting_signoff"),
+                      "channel": item.channel,
+                      "record": record,
+                      "envelopes": result.get("envelopes"),
+                      "capabilities": result.get("capabilities"),
+                      "plan": result.get("plan")},
             )
         return session_id
 

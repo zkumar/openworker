@@ -77,7 +77,10 @@ class CapabilityRouter:
             "decision": outcome.get("decision") or (gates[-1]["state_after"] if gates else None),
             "plan": {"name": plan["name"],
                      "signoff": next((t.get("signoff") for t in plan["transitions"]
-                                      if t.get("signoff")), None)},
+                                      if t.get("signoff")), None),
+                     "states": [s["name"] for s in plan["states"]],
+                     "gate_state": next((t["to"] for t in plan["transitions"]
+                                         if t.get("signoff")), None)},
             "envelopes": len(chain.get("envelopes") or []),
             "session_id": session_id,
         }
