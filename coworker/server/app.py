@@ -20,7 +20,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -169,6 +169,9 @@ from .manager import SessionManager, _approval_body
 
 
 def create_app(manager: SessionManager) -> FastAPI:
+    from coworker.channels import install_defaults
+
+    install_defaults()
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         try:
@@ -331,6 +334,26 @@ def create_app(manager: SessionManager) -> FastAPI:
                 }
             )
         return {"subscriptions": out}
+
+    @app.post("/v1/channels/{name}")
+    def channel_ingest(name: str, body: dict) -> dict[str, Any]:
+        """A work item arrives from a channel and is dispatched straight away.
+
+        The channel turns the payload into a work item; the capability router frames it, picks
+        an agent from its declared card, executes the governed run and records the lesson.
+        This is the harness end of the loop — no domain is named anywhere here.
+        """
+        from coworker.channels import ingest as channel_ingest_item
+        from coworker.dispatch import CapabilityRouter
+
+        try:
+            item = channel_ingest_item(name, body or {})
+        except KeyError:
+            raise HTTPException(status_code=404, detail=f"unknown channel {name!r}")
+        if item is None:
+            return {"ok": False, "detail": "payload carried no work item"}
+        result = CapabilityRouter().route(item.record)
+        return {"ok": True, "channel": item.channel, "record": item.record, "result": result}
 
     @app.get("/v1/channels/recent")
     def recent_channels() -> dict[str, Any]:
