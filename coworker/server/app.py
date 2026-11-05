@@ -168,7 +168,8 @@ from ..teams.model import BoardNotFoundError as TeamsBoardNotFoundError
 from .manager import SessionManager, _approval_body
 
 
-def _start_and_dispatch(manager, name: str, payload: dict, event_id: str | None = None) -> dict:
+def _start_and_dispatch(manager, name: str, payload: dict, event_id: str | None = None,
+                       tenant: str = "") -> dict:
     """Create the run and drive it in the background. Shared by HTTP ingress and the consumer."""
     import threading
 
@@ -183,6 +184,8 @@ def _start_and_dispatch(manager, name: str, payload: dict, event_id: str | None 
         return {"ok": False, "detail": "payload carried no work item"}
 
     session_id, inbox_id = manager.channel_run_start(item)
+    if tenant:
+        manager.stamp_tenant(inbox_id, tenant)
     if event_id:
         # Claim it NOW. Leaving it pending while the run is in flight lets the consumer pick the
         # same event up and start a second run for one record.
@@ -266,31 +269,48 @@ def create_app(manager: SessionManager) -> FastAPI:
         "/oauth/callback",
     }
 
-    def _request_authenticated(request: Request) -> bool:
-        provided = request.headers.get("x-openworker-token", "")
-        return bool(
-            api_token
-            and provided
-            and secrets.compare_digest(provided, api_token)
+    # The env token is imported as a real key so an existing deployment keeps working; it can
+    # then be rotated away (mint, switch callers, revoke) instead of requiring a coordinated stop.
+    if api_token:
+        manager.keys.adopt(api_token, tenant=os.environ.get("COWORKER_TENANT", "default"))
+    if not manager.keys.count():
+        _boot, _boot_id = manager.keys.mint("default", "bootstrap — replace me")
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "no API keys found; minted a bootstrap key (store it now, it is not shown again): %s",
+            _boot,
         )
 
+    def _caller_tenant(request: Request) -> str | None:
+        """Who is calling, from either header. None = not authenticated."""
+        bearer = request.headers.get("authorization", "")
+        provided = request.headers.get("x-openworker-token", "")
+        if not provided and bearer.lower().startswith("bearer "):
+            provided = bearer.split(" ", 1)[1].strip()
+        return manager.keys.verify(provided) if provided else None
+
+    def _request_authenticated(request: Request) -> bool:
+        tenant = _caller_tenant(request)
+        if tenant is None:
+            return False
+        request.state.tenant = tenant
+        return True
+
     def _websocket_authenticated(ws: WebSocket) -> bool:
-        if not api_token:
-            return True
         protocols = {
             part.strip()
             for part in ws.headers.get("sec-websocket-protocol", "").split(",")
             if part.strip()
         }
-        return any(secrets.compare_digest(part, api_token) for part in protocols)
+        return any(manager.keys.verify(part) is not None for part in protocols)
 
     @app.middleware("http")
     async def require_sidecar_token(request: Request, call_next):
         # Preflights carry the requested header name, not its value. CORS checks the
         # Origin; the actual state-changing request still must authenticate.
         if (
-            not api_token
-            or request.method == "OPTIONS"
+            request.method == "OPTIONS"
             or request.url.path in tokenless_paths
             # `/v1/board` carries its own, stronger auth: per-actor board tokens
             # (identity + access), designed to be handed to external harnesses and
@@ -420,14 +440,37 @@ def create_app(manager: SessionManager) -> FastAPI:
         return {"subscriptions": out}
 
     @app.get("/v1/inbox/{item_id}/receipt")
-    def inbox_receipt(item_id: str) -> dict[str, Any]:
+    def inbox_receipt(item_id: str, request: Request) -> dict[str, Any]:
         """The machine-readable result of a run — the outbound JSON contract."""
         item = manager.inbox.get(item_id)
         if item is None:
             raise HTTPException(status_code=404, detail="unknown item")
+        mine = getattr(request.state, "tenant", "")
+        theirs = (item.data or {}).get("tenant")
+        if mine and theirs and mine != theirs:
+            raise HTTPException(status_code=404, detail="unknown item")   # don't leak existence
         # Always derived from the item's CURRENT state: a stored snapshot can lag the run
         # (e.g. a signature that arrives while the last step is still being appended).
         return manager.build_receipt(item)
+
+    @app.get("/v1/keys")
+    def list_keys() -> dict[str, Any]:
+        """Which keys exist (never the key material), so an operator can rotate safely."""
+        return {"keys": manager.keys.list()}
+
+    @app.post("/v1/keys")
+    def mint_key(body: dict) -> dict[str, Any]:
+        tenant = str(body.get("tenant") or "default").strip() or "default"
+        label = str(body.get("label") or "").strip()
+        key, key_id = manager.keys.mint(tenant, label)
+        # Shown exactly once: it is stored hashed and cannot be recovered later.
+        return {"ok": True, "id": key_id, "tenant": tenant, "key": key}
+
+    @app.post("/v1/keys/{key_id}/revoke")
+    def revoke_key(key_id: str) -> dict[str, Any]:
+        if not manager.keys.revoke(key_id):
+            raise HTTPException(status_code=404, detail="unknown or already revoked key")
+        return {"ok": True}
 
     @app.post("/v1/receipts/verify")
     def verify_receipt_body(receipt: dict[str, Any]) -> dict[str, Any]:
@@ -437,7 +480,7 @@ def create_app(manager: SessionManager) -> FastAPI:
         return verify_receipt(receipt)
 
     @app.post("/v1/channels/{name}")
-    def channel_ingest(name: str, body: dict) -> dict[str, Any]:
+    def channel_ingest(name: str, body: dict, request: Request) -> dict[str, Any]:
         """A work item arrives from a channel and is dispatched straight away.
 
         The channel turns the payload into a work item; the capability router frames it, picks
@@ -454,7 +497,8 @@ def create_app(manager: SessionManager) -> FastAPI:
         # process dies before the run starts (the consumer re-dispatches it on restart).
         event_id = manager.ingress.enqueue(name, body or {})
         try:
-            return _start_and_dispatch(manager, name, body or {}, event_id)
+            return _start_and_dispatch(manager, name, body or {}, event_id,
+                                       tenant=getattr(request.state, "tenant", "") or "")
         except KeyError:
             manager.ingress.mark_failed(event_id, f"unknown channel {name!r}")
             raise HTTPException(status_code=404, detail=f"unknown channel {name!r}")

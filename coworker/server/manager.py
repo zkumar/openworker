@@ -219,11 +219,14 @@ class SessionManager:
         base.mkdir(parents=True, exist_ok=True)
 
         self._active_runs: set[str] = set()
+        from coworker.auth.keys import KeyStore
         from coworker.ingress import IngressQueue
         from coworker.server.runstore import RunStore
         self.runs = RunStore(base / "runs.sqlite")
         # Durable ingress: a record that was accepted is never lost to a restart.
         self.ingress = IngressQueue(base / "ingress.sqlite")
+        # Per-tenant API keys (hashed, revocable) replace one shared static token.
+        self.keys = KeyStore(str(base / "keys.sqlite"))
         from coworker.channels.spool import FileSpool
         self.spool = FileSpool(base / "spool")   # inbox ids this process owns right now
         self.memory_store: MemoryStore = SQLiteMemoryStore(base / "coworker.db")
@@ -5108,6 +5111,14 @@ class SessionManager:
             if k.endswith("_id") and k not in cls._SUBJECT_KEYS and isinstance(v, str) and v:
                 return v
         return ""
+
+    def stamp_tenant(self, item_id: str, tenant: str) -> None:
+        """Record WHICH tenant sent this work, so reads can be scoped to it."""
+        item = self.inbox.get(item_id)
+        if item is None:
+            return
+        item.data = {**(item.data or {}), "tenant": tenant}
+        self.inbox._save()          # noqa: SLF001
 
     def channel_run_start(self, item: Any) -> tuple[str, str]:
         """Open a run BEFORE it executes, so the UI can watch it. Returns (session_id, inbox_id)."""

@@ -18,8 +18,12 @@ def _fabric_up() -> bool:
 
 
 @pytest.fixture()
-def client(tmp_path):
-    return TestClient(create_app(SessionManager(data_dir=tmp_path / "data")))
+def client(tmp_path, monkeypatch):
+    # Auth is real now: the app authenticates every call, so the test carries a key.
+    monkeypatch.setenv("COWORKER_API_TOKEN", "test-token")
+    c = TestClient(create_app(SessionManager(data_dir=tmp_path / "data")))
+    c.headers.update({"X-OpenWorker-Token": "test-token"})
+    return c
 
 
 def test_unknown_channel_is_not_found(client):
