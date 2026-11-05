@@ -5083,6 +5083,20 @@ class SessionManager:
                 return item.session_id
         return None
 
+    def append_channel_outcome(self, session_id: str, signed: dict[str, Any]) -> None:
+        """Write the signed verdict back into the session so the UI shows the result, not silence."""
+        record = self.session_store.load(session_id)
+        if record is None:
+            return
+        gate = signed.get("signed") or {}
+        final = signed.get("final_state") or gate.get("state_after") or "complete"
+        record.messages.append({
+            "role": "assistant",
+            "content": (f"Signed by a human — gate `{gate.get('state_before')} → {gate.get('state_after')}` "
+                        f"(`{gate.get('signoff')}`) sealed, and the governed run finished **{final}**."),
+        })
+        self.session_store.save(record)
+
     def sign_channel_item(self, session_id: str) -> dict[str, Any]:
         """Complete the human gate for a channel item: the fabric seals the signature and finishes.
 

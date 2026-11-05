@@ -439,6 +439,8 @@ export function App() {
   const resolveSessionInbox = async (id: string, resolution: string) => {
     await resolveInboxItem(id, resolution);
     getInbox(sessionId, "pending").then(setSessionInbox).catch(() => setSessionInbox([]));
+    // the resolved gate writes its signed verdict into the session — show it without a reload
+    getSessionMessages(sessionId).then((m) => setItems(itemsFromMessages(m))).catch(() => {});
     refreshSessions(); // attention badge should drop right away
   };
   // MUST pick a folder before starting — requires_folder personas (git-bound Code, the
