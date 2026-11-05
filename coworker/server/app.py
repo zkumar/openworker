@@ -385,6 +385,7 @@ def create_app(manager: SessionManager) -> FastAPI:
 
         from coworker.channels import ingest as channel_ingest_item
         from coworker.dispatch import CapabilityRouter
+        from coworker.dispatch.router import FabricRefusal
 
         try:
             item = channel_ingest_item(name, body or {})
@@ -403,6 +404,8 @@ def create_app(manager: SessionManager) -> FastAPI:
                     on_step=lambda step: manager.channel_append_step(inbox_id, step),
                     on_start=lambda run_id, agent: manager.channel_set_run(inbox_id, run_id, agent))
                 manager.channel_run_finish(inbox_id, result, session_id)
+            except FabricRefusal as exc:                 # actionable: show the fabric's own words
+                manager.channel_run_fail(inbox_id, exc.detail, retryable=exc.retryable)
             except Exception as exc:
                 manager.channel_run_fail(inbox_id, str(exc))
 

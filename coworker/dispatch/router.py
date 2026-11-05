@@ -17,6 +17,19 @@ import httpx
 FABRIC = os.environ.get("REGAGENTIC_FABRIC_URL", "http://127.0.0.1:8766")
 
 
+class FabricRefusal(Exception):
+    """The fabric refused the work in a way a human can act on (usually a 4xx).
+
+    `retryable` is False for a refusal: repeating the same call cannot succeed.
+    """
+
+    def __init__(self, detail: str, status: int = 0) -> None:
+        super().__init__(detail)
+        self.detail = detail
+        self.status = status
+        self.retryable = status == 0 or status >= 500
+
+
 class CapabilityRouter:
     """The harness half of `frame → capability → execute → learn`."""
 
@@ -36,6 +49,17 @@ class CapabilityRouter:
                 response.raise_for_status()
                 self._token = response.json()["access_token"]
         return {"Authorization": f"Bearer {self._token}"}
+
+    @staticmethod
+    def _refusal(exc: Exception) -> "FabricRefusal":
+        status = getattr(getattr(exc, "response", None), "status_code", 0) or 0
+        detail = ""
+        try:
+            body = exc.response.json()                      # type: ignore[attr-defined]
+            detail = str(body.get("detail") or body.get("error") or "")
+        except Exception:
+            detail = str(getattr(exc, "response", "") or exc)
+        return FabricRefusal(detail or "the fabric refused the request", status)
 
     def _get(self, path: str) -> Any:
         with httpx.Client(timeout=20) as client:
@@ -58,6 +82,14 @@ class CapabilityRouter:
             if overlap and (best is None or len(overlap) > best[0]):
                 best = (len(overlap), card)
         return best[1] if best else None
+
+    def _pursue(self, session_id: str, inputs: dict) -> Any:
+        try:
+            return self._post(f"/api/runs/{session_id}/pursue", {"inputs": inputs})
+        except httpx.HTTPStatusError as exc:
+            raise self._refusal(exc) from exc
+        except httpx.RequestError as exc:
+            raise FabricRefusal(f"fabric unreachable: {exc}", 0) from exc
 
     def _watch(self, session_id: str, on_step: Callable[[dict], None], stop: threading.Event) -> None:
         """Relay the fabric's live step stream into the caller as it happens."""
@@ -154,7 +186,7 @@ class CapabilityRouter:
         if on_step is not None:
             watcher = threading.Thread(target=self._watch, args=(session_id, on_step, stop), daemon=True)
             watcher.start()
-        outcome = self._post(f"/api/runs/{session_id}/pursue", {"inputs": item})
+        outcome = self._pursue(session_id, item)
         stop.set()
         paused = bool(outcome.get("paused"))
         gates = self._get(f"/api/runs/{session_id}/pending-signoff").get("gates") or [] if paused else []

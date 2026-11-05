@@ -5212,7 +5212,10 @@ class SessionManager:
                                               on_step=lambda s: self.channel_append_step(item.id, s))
                     self.channel_run_finish(item.id, result, item.session_id)
                 except Exception as exc:
-                    self.channel_run_fail(item.id, f"resume failed: {exc}")
+                    detail = getattr(exc, "detail", None)
+                    retryable = getattr(exc, "retryable", True)
+                    self.channel_run_fail(item.id, detail or f"resume failed: {exc}",
+                                          retryable=retryable)
 
             threading.Thread(target=work, daemon=True).start()
 
@@ -5261,15 +5264,20 @@ class SessionManager:
             if (it.data or {}).get("receipt_pending"):
                 self.deliver_receipt(it.id)
 
-    def channel_run_fail(self, item_id: str, error: str) -> None:
+    def channel_run_fail(self, item_id: str, error: str, retryable: bool = True) -> None:
         item = self.inbox.get(item_id)
         if item is None:
             return
         self._active_runs.discard(item_id)
-        state = self.runs.fail(item_id, error)      # backoff decides retry vs terminal
+        if retryable:
+            state = self.runs.fail(item_id, error)   # backoff decides retry vs terminal
+        else:
+            self.runs.finish(item_id, "failed")      # a refusal cannot be fixed by repeating it
+            state = "failed"
         item.data = {**(item.data or {}), "running": False, "error": error,
                      "retrying": state == "dispatched"}
-        item.title = "Run failed"
+        # a refusal is not a failure: the input was rejected, nothing broke
+        item.title = "Run failed" if state == "dispatched" else f"Rejected: {error[:60]}"
         item.body = error
         self.inbox._save()          # noqa: SLF001
 
