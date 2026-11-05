@@ -168,6 +168,46 @@ from ..teams.model import BoardNotFoundError as TeamsBoardNotFoundError
 from .manager import SessionManager, _approval_body
 
 
+def _start_and_dispatch(manager, name: str, payload: dict, event_id: str | None = None) -> dict:
+    """Create the run and drive it in the background. Shared by HTTP ingress and the consumer."""
+    import threading
+
+    from coworker.channels import ingest as channel_ingest_item
+    from coworker.dispatch import CapabilityRouter
+    from coworker.dispatch.router import FabricRefusal
+
+    item = channel_ingest_item(name, payload or {})
+    if item is None:
+        if event_id:
+            manager.ingress.mark_failed(event_id, "payload carried no work item")
+        return {"ok": False, "detail": "payload carried no work item"}
+
+    session_id, inbox_id = manager.channel_run_start(item)
+    if event_id:
+        # Claim it NOW. Leaving it pending while the run is in flight lets the consumer pick the
+        # same event up and start a second run for one record.
+        manager.ingress.mark_dispatched(event_id, session_id)
+
+    def run() -> None:
+        try:
+            result = CapabilityRouter().route(
+                item.record,
+                on_step=lambda step: manager.channel_append_step(inbox_id, step),
+                on_start=lambda run_id, agent: manager.channel_set_run(inbox_id, run_id, agent))
+            manager.channel_run_finish(inbox_id, result, session_id)
+        except FabricRefusal as exc:                 # actionable: show the fabric's own words
+            manager.channel_run_fail(inbox_id, exc.detail, retryable=exc.retryable,
+                                     not_found=(exc.status == 404))
+        except Exception as exc:
+            manager.channel_run_fail(inbox_id, str(exc))
+            if event_id:                             # transient: a restart retries the record
+                manager.ingress.mark_failed(event_id, str(exc))
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"ok": True, "channel": item.channel, "running": True,
+            "session_id": session_id, "inbox_id": inbox_id, "event_id": event_id}
+
+
 def create_app(manager: SessionManager) -> FastAPI:
     from coworker.channels import install_defaults
 
@@ -199,6 +239,21 @@ def create_app(manager: SessionManager) -> FastAPI:
             try:
                 manager.resume_interrupted_runs()   # restart recovery AND retry after backoff
                 manager.deliver_pending_receipts()  # undelivered JSON receipts
+                # Records accepted before a crash and never started: dispatch them now.
+                for ev in manager.ingress.due():
+                    try:
+                        _start_and_dispatch(manager, ev["channel"], ev["payload"], ev["id"])
+                    except KeyError:
+                        manager.ingress.mark_failed(ev["id"], f"unknown channel {ev['channel']!r}")
+                    except Exception as exc:
+                        manager.ingress.mark_failed(ev["id"], str(exc))
+                # Offline arrivals: JSON files dropped while the harness was down.
+                for channel, payload, path in manager.spool.poll():
+                    try:
+                        out = _start_and_dispatch(manager, channel, payload)
+                        manager.spool.done(path) if out.get("ok") else manager.spool.reject(path)
+                    except Exception:
+                        manager.spool.fail(path)
             except Exception:
                 pass
             time.sleep(5.0)
@@ -395,32 +450,14 @@ def create_app(manager: SessionManager) -> FastAPI:
         from coworker.dispatch import CapabilityRouter
         from coworker.dispatch.router import FabricRefusal
 
+        # Persist BEFORE doing anything: once we answer 200 the work is durable even if the
+        # process dies before the run starts (the consumer re-dispatches it on restart).
+        event_id = manager.ingress.enqueue(name, body or {})
         try:
-            item = channel_ingest_item(name, body or {})
+            return _start_and_dispatch(manager, name, body or {}, event_id)
         except KeyError:
+            manager.ingress.mark_failed(event_id, f"unknown channel {name!r}")
             raise HTTPException(status_code=404, detail=f"unknown channel {name!r}")
-        if item is None:
-            return {"ok": False, "detail": "payload carried no work item"}
-
-        # Open the run first, then dispatch in the background, so the UI can watch it.
-        session_id, inbox_id = manager.channel_run_start(item)
-
-        def run() -> None:
-            try:
-                result = CapabilityRouter().route(
-                    item.record,
-                    on_step=lambda step: manager.channel_append_step(inbox_id, step),
-                    on_start=lambda run_id, agent: manager.channel_set_run(inbox_id, run_id, agent))
-                manager.channel_run_finish(inbox_id, result, session_id)
-            except FabricRefusal as exc:                 # actionable: show the fabric's own words
-                manager.channel_run_fail(inbox_id, exc.detail, retryable=exc.retryable,
-                                         not_found=(exc.status == 404))
-            except Exception as exc:
-                manager.channel_run_fail(inbox_id, str(exc))
-
-        threading.Thread(target=run, daemon=True).start()
-        return {"ok": True, "channel": item.channel, "running": True,
-                "session_id": session_id, "inbox_id": inbox_id}
 
     @app.get("/v1/channels/recent")
     def recent_channels() -> dict[str, Any]:

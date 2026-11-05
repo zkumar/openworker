@@ -219,8 +219,13 @@ class SessionManager:
         base.mkdir(parents=True, exist_ok=True)
 
         self._active_runs: set[str] = set()
+        from coworker.ingress import IngressQueue
         from coworker.server.runstore import RunStore
-        self.runs = RunStore(base / "runs.sqlite")   # inbox ids this process owns right now
+        self.runs = RunStore(base / "runs.sqlite")
+        # Durable ingress: a record that was accepted is never lost to a restart.
+        self.ingress = IngressQueue(base / "ingress.sqlite")
+        from coworker.channels.spool import FileSpool
+        self.spool = FileSpool(base / "spool")   # inbox ids this process owns right now
         self.memory_store: MemoryStore = SQLiteMemoryStore(base / "coworker.db")
         # MEMORY-SPEC §4.3/§6: the on/off switch + the user's standing rules. Settings-
         # level, outside the memory table; read at engine build time.
