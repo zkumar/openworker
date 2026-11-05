@@ -31,6 +31,18 @@ def test_empty_payload_carries_no_work(client):
     assert body["ok"] is False
 
 
+def _wait_for_run(client, session_id, timeout=25.0):
+    """The dispatch is asynchronous: poll the item until the run reports it finished."""
+    import time
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        items = client.get(f"/v1/inbox?session_id={session_id}").json()["items"]
+        if items and not (items[0].get("data") or {}).get("running"):
+            return items[0]
+        time.sleep(0.2)
+    raise AssertionError("run did not finish in time")
+
+
 @pytest.mark.skipif(not _fabric_up(), reason="no fabric at :8766")
 def test_approving_the_inbox_item_signs_the_governed_run(client):
     body = client.post("/v1/channels/webhook", json={"record": {
@@ -40,8 +52,9 @@ def test_approving_the_inbox_item_signs_the_governed_run(client):
         "requested_units": 1,
         "clinical_notes": "45yo male, severe right knee OA, conservative care failed.",
     }}).json()
+    assert body["running"] is True, "the route must return before the run executes"
     session_id = body["session_id"]
-    approval = client.get(f"/v1/inbox?session_id={session_id}").json()["items"][0]
+    approval = _wait_for_run(client, session_id)
     assert approval["kind"] == "approval"
     resolved = client.post(f"/v1/inbox/{approval['id']}/resolve",
                            json={"resolution": "approve"}).json()
@@ -61,8 +74,11 @@ def test_webhook_record_is_dispatched_and_sealed(client):
     }})
     body = response.json()
     assert body["ok"] is True and body["channel"] == "webhook"
-    assert body["result"]["agent"] == "payor.demo.prior_auth"
-    assert body["result"]["awaiting_signoff"] is True, "a gated agent must pause, not self-sign"
+    item = _wait_for_run(client, body["session_id"])
+    data = item["data"]
+    assert data["agent"] == "payor.demo.prior_auth"
+    assert data["awaiting_signoff"] is True, "a gated agent must pause, not self-sign"
+    assert len(data["steps"]) >= 4, "each sealed step is recorded for the timeline"
 
     # the loop is SURFACED, not just returned: a real session and a parked approval
     session_id = body["session_id"]
