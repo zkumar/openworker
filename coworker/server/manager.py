@@ -5152,7 +5152,7 @@ class SessionManager:
             return
         data = dict(item.data or {})
         steps = result.get("steps") or data.get("steps") or []
-        gated = bool(result.get("awaiting_signoff"))
+        gated = bool(result.get("gates") or result.get("awaiting_signoff"))
         decided = result.get("decision")
         item.data = {**data,
                      "agent": result.get("agent"), "decision": decided,
@@ -5170,6 +5170,7 @@ class SessionManager:
                      f"Signature: {(result.get('plan') or {}).get('signoff') or 'human sign-off'}."
                      if gated else f"{len(steps)} steps sealed.")
         self.inbox._save()          # noqa: SLF001
+        self.deliver_receipt(item_id)       # outbound: the run's JSON receipt
         record = self.session_store.load(session_id)
         if record is not None:
             # The session title is written once by the store; the outcome lives on the item
@@ -5215,6 +5216,51 @@ class SessionManager:
 
             threading.Thread(target=work, daemon=True).start()
 
+    def build_receipt(self, item: Any) -> dict[str, Any]:
+        """The OUTBOUND payload: everything a consumer needs, in plain JSON."""
+        d = item.data or {}
+        steps = d.get("steps") or []
+        sig = d.get("signature") or None
+        return {
+            "receipt_version": 1,
+            "work_item": {"channel": d.get("channel"),
+                          "ref": self._record_ref(d.get("record")),
+                          "received_at": item.created_at},
+            "agent": d.get("agent"),
+            "decision": d.get("decision"),
+            "sealed": bool(sig),
+            "awaiting_signoff": bool(d.get("awaiting_signoff")) and not sig,
+            "signature": sig,
+            "steps": [{"n": i + 1,
+                       "from_state": s.get("state_before"),
+                       "to_state": s.get("state_after"),
+                       "summary": s.get("summary"),
+                       "sha256": s.get("sha256")} for i, s in enumerate(steps)],
+            "evidence": {"fabric_run": d.get("fabric_run"),
+                         "envelopes": len(steps),
+                         "chain_head": steps[-1].get("sha256") if steps else None},
+            "harness": {"session_id": item.session_id, "inbox_id": item.id},
+        }
+
+    def deliver_receipt(self, item_id: str) -> list[str]:
+        """Emit the receipt through every egress; a failure is retried, never dropped."""
+        from coworker.channels import registry
+
+        item = self.inbox.get(item_id)
+        if item is None:
+            return []
+        receipt = self.build_receipt(item)
+        failed = registry.deliver(receipt)
+        item.data = {**(item.data or {}), "receipt": receipt,
+                     "receipt_pending": bool(failed), "receipt_failed": failed}
+        self.inbox._save()          # noqa: SLF001
+        return failed
+
+    def deliver_pending_receipts(self) -> None:
+        for it in self.inbox.list():
+            if (it.data or {}).get("receipt_pending"):
+                self.deliver_receipt(it.id)
+
     def channel_run_fail(self, item_id: str, error: str) -> None:
         item = self.inbox.get(item_id)
         if item is None:
@@ -5238,9 +5284,11 @@ class SessionManager:
             return
         from datetime import datetime as _now
         item.data = {**(item.data or {}),
+                     "awaiting_signoff": False,      # it was waiting; now it is signed
                      "signature": {"approver": approver,
                                    "at": _now.now().strftime("%Y-%m-%d %H:%M"), **gate}}
         self.inbox._save()          # noqa: SLF001 — same package, single writer
+        self.deliver_receipt(item_id)       # re-emit, now carrying the signature
 
     def record_steps(self, item_id: str, steps: list[dict[str, Any]]) -> None:
         """Keep the item's step timeline current after the signature appends its final step."""

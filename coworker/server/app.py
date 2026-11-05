@@ -198,6 +198,7 @@ def create_app(manager: SessionManager) -> FastAPI:
         while True:
             try:
                 manager.resume_interrupted_runs()   # restart recovery AND retry after backoff
+                manager.deliver_pending_receipts()  # undelivered JSON receipts
             except Exception:
                 pass
             time.sleep(5.0)
@@ -362,6 +363,15 @@ def create_app(manager: SessionManager) -> FastAPI:
                 }
             )
         return {"subscriptions": out}
+
+    @app.get("/v1/inbox/{item_id}/receipt")
+    def inbox_receipt(item_id: str) -> dict[str, Any]:
+        """The machine-readable result of a run — the outbound JSON contract."""
+        item = manager.inbox.get(item_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="unknown item")
+        data = item.data or {}
+        return data.get("receipt") or manager.build_receipt(item)
 
     @app.post("/v1/channels/{name}")
     def channel_ingest(name: str, body: dict) -> dict[str, Any]:

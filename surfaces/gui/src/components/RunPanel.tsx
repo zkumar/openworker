@@ -13,6 +13,7 @@ export interface RunData {
   envelopes?: number;
   awaiting_signoff?: boolean;
   plan?: Plan;
+  receipt?: Record<string, unknown>;
   steps?: {
     type?: string; summary?: string; state_before?: string; state_after?: string;
     sha256?: string; at?: string;
@@ -160,6 +161,18 @@ export function RunPanel({
         <div className="border-t border-line px-4 py-3 text-[13px] text-danger">
           <strong>Run failed.</strong> {data.error}
         </div>
+      )}
+
+      {/* what leaves the system: the outbound JSON contract */}
+      {data.receipt && (
+        <details className="border-t border-line px-4 py-3">
+          <summary className="cursor-pointer text-[12px] font-semibold uppercase tracking-wide text-muted">
+            Output · JSON
+          </summary>
+          <pre className="mt-2 max-h-56 overflow-auto rounded-md bg-panel p-2 text-[11px] leading-snug text-ink">
+{JSON.stringify(data.receipt, null, 2)}
+          </pre>
+        </details>
       )}
 
       {/* the gate, or the signed receipt */}

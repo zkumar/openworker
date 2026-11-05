@@ -30,3 +30,17 @@ class Channel(Protocol):
     def ingest(self, payload: dict[str, Any]) -> WorkItem | None:
         """Turn one payload into a work item, or None if it carries no work."""
         ...
+
+
+class Egress(Protocol):
+    """Where a sealed result LEAVES the harness. The outbound mirror of Channel.
+
+    A receipt is plain JSON so any consumer (a gateway, a queue, a file drop, a partner) can
+    read it without knowing this product's internals.
+    """
+
+    name: str
+
+    def deliver(self, receipt: dict[str, Any]) -> None:
+        """Deliver one receipt. Raising means "not delivered" — the journal retries it."""
+        ...
