@@ -20,6 +20,7 @@ export interface RunData {
   record?: Record<string, unknown>;
   fabric_run?: string;
   running?: boolean;
+  error?: string;
   signature?: {
     approver?: string;
     at?: string;
@@ -150,6 +151,12 @@ export function RunPanel({
               </li>
             ))}
           </ol>
+        </div>
+      )}
+
+      {data.error && (
+        <div className="border-t border-line px-4 py-3 text-[13px] text-danger">
+          <strong>Run failed.</strong> {data.error}
         </div>
       )}
 

@@ -5084,6 +5084,13 @@ class SessionManager:
                 return item.session_id
         return None
 
+    @staticmethod
+    def _record_ref(record: dict[str, Any] | None) -> str:
+        for k, v in (record or {}).items():
+            if k.endswith("_id") and isinstance(v, str) and v:
+                return v
+        return ""
+
     def channel_run_start(self, item: Any) -> tuple[str, str]:
         """Open a run BEFORE it executes, so the UI can watch it. Returns (session_id, inbox_id)."""
         session_id = f"ch_{uuid.uuid4().hex[:12]}"
@@ -5099,7 +5106,7 @@ class SessionManager:
                 mode=self.mode.value,
                 messages=[{"role": "user",
                            "content": f"Work item received from channel: {item.channel}"}],
-                title=f"{item.channel}: running",
+                title=f"{item.channel} · {self._record_ref(item.record)} · running".replace(" ·  · ", " · "),
                 agent="code",
                 origin=item.channel,
                 origin_label=f"{item.channel} work item",
@@ -5148,8 +5155,10 @@ class SessionManager:
                      "awaiting_signoff": gated, "plan": result.get("plan"),
                      "capabilities": result.get("capabilities"),
                      "running": False, "steps": steps, "envelopes": len(steps)}
-        item.title = (f"Sign off: {result.get('agent')} → {decided}" if gated
-                      else f"{item.data.get('channel', 'channel')}: {decided}")
+        ref = self._record_ref(item.data.get("record"))
+        label = f"{item.data.get('channel', 'channel')}" + (f" · {ref}" if ref else "")
+        item.title = (f"Sign off: {result.get('agent')} → {decided} · {ref}" if gated
+                      else f"{label} · {decided}")
         self._active_runs.discard(item_id)
         item.body = (f"{len(steps)} steps sealed. "
                      f"Signature: {(result.get('plan') or {}).get('signoff') or 'human sign-off'}."
@@ -5157,7 +5166,9 @@ class SessionManager:
         self.inbox._save()          # noqa: SLF001
         record = self.session_store.load(session_id)
         if record is not None:
-            record.title = f"{item.data.get('channel', 'channel')}: {decided}"
+            record.title = (f"{item.data.get('channel', 'channel')}"
+                            + (f" · {self._record_ref(item.data.get('record'))}" if self._record_ref(item.data.get("record")) else "")
+                            + f" · {decided}")
             self.session_store.save(record)
 
     def resume_interrupted_runs(self) -> None:

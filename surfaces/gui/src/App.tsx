@@ -425,6 +425,8 @@ export function App() {
   const [sessionInbox, setSessionInbox] = useState<InboxItem[]>([]);
   // The card must not vanish on approval: keep a resolved marker naming the signer and time.
   const [signedItem, setSignedItem] = useState<InboxItem | null>(null);
+  // A refused signature must be said out loud, not swallowed.
+  const [signError, setSignError] = useState<string | null>(null);
   // Whether the active session is Unattended — when true, the agent's prompts route to the Inbox,
   // so we suppress the inline live cards (the Inbox / answer-in-context path shows them instead).
   // A ref too, because the WS event handler closes over stale state.
@@ -474,7 +476,8 @@ export function App() {
 
   const resolveSessionInbox = async (id: string, resolution: string) => {
     const who = fabricUser() || "a human approver";
-    await resolveInboxItem(id, resolution, who);
+    const outcome = await resolveInboxItem(id, resolution, who);
+    setSignError(outcome?.sign_error ?? null);
     refreshSigned(); // the resolved gate persists its signature on the item — reload it
     refreshSessions(); // attention badge should drop right away
   };
@@ -1938,6 +1941,16 @@ export function App() {
         )}
         <div className={"main-workspace" + (railHidden ? " rail-hidden" : "")}>
           <div className="main-chat">
+            {/* The run leads the view: record, process, live steps and gate sit above the chat. */}
+            {sessionInbox[0] && ((sessionInbox[0].data ?? {}) as RunData).record ? (
+              <RunPanel
+                data={{ ...(sessionInbox[0].data as RunData), error: signError ?? undefined }}
+                pending
+                onDecide={(d) => void resolveSessionInbox(sessionInbox[0].id, d)}
+              />
+            ) : signedItem ? (
+              <RunPanel data={signedItem.data as RunData} pending={false} onDecide={() => {}} />
+            ) : null}
             {/* Automation-run context (owner ask 2026-07-04): a __run__ session looked like any
                 other chat with no way back to the runs list. Lives INSIDE the chat column (which
                 is padded to clear the absolute glass topbar — rendering above .main-workspace put
@@ -2190,15 +2203,7 @@ export function App() {
                   // live path. Everything else keeps the Inbox card.
                   (() => {
                     const run = sessionInbox[0].data as RunData | undefined;
-                    if (run?.record) {
-                      return (
-                        <RunPanel
-                          data={run}
-                          pending
-                          onDecide={(d) => void resolveSessionInbox(sessionInbox[0].id, d)}
-                        />
-                      );
-                    }
+                    if (run?.record) return null;   // rendered at the top of the chat column
                     const parked = approvalItemFromParked(sessionInbox[0]);
                     const d = sessionInbox[0].data;
                     return parked ? (
@@ -2219,8 +2224,6 @@ export function App() {
                       <InboxItemCard item={sessionInbox[0]} onResolve={resolveSessionInbox} compact />
                     );
                   })()
-                ) : signedItem ? (
-                  <RunPanel data={signedItem.data as RunData} pending={false} onDecide={() => {}} />
                 ) : undefined
               }
             />
