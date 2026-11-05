@@ -3,6 +3,7 @@ import { getI18n, useTranslation } from "react-i18next";
 import type { ApprovalDecision, Item } from "../types";
 import { humanizeApprovalTitle, type HumanLine } from "../humanize";
 import { Icon } from "./Icon";
+import { FabricTaskPreview } from "./FabricTaskPreview";
 
 export function shortArgs(args: any): string {
   if (!args || typeof args !== "object") return "";
@@ -520,6 +521,8 @@ export function ApprovalCard({
       )}
       {/* save_skill (SKILLS-SPEC §5.2): the arguments ARE the review surface. */}
       {item.name === "save_skill" && <SaveSkillPreview args={item.args} />}
+      {/* The fabric's governed agents over MCP: render the record + plan, not an args dump. */}
+      {item.name.startsWith("mcp__regagentic") && <FabricTaskPreview args={item.args} />}
       {/* Egress evidence (OPE-136 finding 5): the FULL URL/query in the expandable
           block — §1.9 gives the reviewer the whole envelope because the path and query
           are where exfiltration rides; the human's own card must see no less. Never
@@ -541,9 +544,12 @@ export function ApprovalCard({
       )}
       {/* MCP arguments (OPE-136 finding 5): everything the call carries, expandable —
           for a stranger's tool the arguments are the only evidence there is. */}
-      {item.name.startsWith("mcp__") && item.args && Object.keys(item.args).length > 0 && (
-        <PreviewBlock text={JSON.stringify(item.args, null, 2)} />
-      )}
+      {item.name.startsWith("mcp__") &&
+        !item.name.startsWith("mcp__regagentic") &&
+        item.args &&
+        Object.keys(item.args).length > 0 && (
+          <PreviewBlock text={JSON.stringify(item.args, null, 2)} />
+        )}
 
       {grants.length > 0 && (
         <div className="approval-grants" data-testid="approval-grants">
