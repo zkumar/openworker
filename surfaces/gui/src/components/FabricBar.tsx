@@ -42,6 +42,7 @@ export function FabricBar() {
     if (!role) return;
     try { localStorage.setItem(ROLE_KEY, role); } catch { /* storage may be absent */ }
     try { window.dispatchEvent(new Event("fabric:role")); } catch { /* no window */ }
+    try { window.dispatchEvent(new Event("fabric:identity")); } catch { /* no window */ }
   }, [role]);
 
   const doLogin = async () => {

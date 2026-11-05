@@ -306,7 +306,8 @@ export function App() {
   // topbar toggle persists per-device. Deep links (artifact/board chips, Access)
   // still force-show transiently — they never overwrite the stored preference.
   const [railHidden, setRailHidden] = useState<boolean>(() => {
-    try { return localStorage.getItem(RAIL_HIDDEN_KEY) !== "0"; } catch { return true; }
+    // Visible by default: the plan/artifacts rail is part of the workflow, not an opt-in.
+    try { return localStorage.getItem(RAIL_HIDDEN_KEY) === "1"; } catch { return false; }
   });
   const setRailHiddenPersist = useCallback((v: boolean) => {
     setRailHidden(v);
