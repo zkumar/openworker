@@ -19,6 +19,7 @@ export interface RunData {
   }[];
   record?: Record<string, unknown>;
   fabric_run?: string;
+  running?: boolean;
   signature?: {
     approver?: string;
     at?: string;
@@ -75,7 +76,14 @@ export function RunPanel({
         <span className="font-mono text-[12px] text-ink">{data.agent}</span>
         <span className="text-[12px] text-faint">chosen from its capability card</span>
         <span className="flex-1" />
-        <span className={"text-[13px] font-semibold " + tone}>{decision}</span>
+        {data.running ? (
+          <span className="flex items-center gap-1.5 text-[13px] font-medium text-accent">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-accent" aria-hidden />
+            running…
+          </span>
+        ) : (
+          <span className={"text-[13px] font-semibold " + tone}>{decision}</span>
+        )}
       </header>
 
       {/* the record */}
@@ -147,7 +155,11 @@ export function RunPanel({
 
       {/* the gate, or the signed receipt */}
       <footer className="flex flex-wrap items-center gap-3 border-t border-line px-4 py-3">
-        {pending ? (
+        {data.running ? (
+          <div className="text-[12px] text-muted">
+            The governed run is executing — steps appear as they seal.
+          </div>
+        ) : pending ? (
           <>
             <div className="min-w-0 flex-1">
               <div className="text-[13px] font-medium text-ink">

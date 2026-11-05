@@ -5083,6 +5083,81 @@ class SessionManager:
                 return item.session_id
         return None
 
+    def channel_run_start(self, item: Any) -> tuple[str, str]:
+        """Open a run BEFORE it executes, so the UI can watch it. Returns (session_id, inbox_id)."""
+        session_id = f"ch_{uuid.uuid4().hex[:12]}"
+        store_path = getattr(self.memory_store, "path", ":memory:")
+        base = Path(store_path).parent if store_path != ":memory:" else Path(tempfile.gettempdir())
+        workspace = self.default_workspace or str(base / "channel-workspaces" / session_id)
+        Path(workspace).mkdir(parents=True, exist_ok=True)
+        self.session_store.save(
+            SessionRecord(
+                session_id=session_id,
+                workspace=workspace,
+                model=self.model,
+                mode=self.mode.value,
+                messages=[{"role": "user",
+                           "content": f"Work item received from channel: {item.channel}"}],
+                title=f"{item.channel}: running",
+                agent="code",
+                origin=item.channel,
+                origin_label=f"{item.channel} work item",
+            )
+        )
+        record = self.inbox.add_approval(
+            session_id,
+            f"Running {item.channel} work item",
+            body="The governed run is executing…",
+            data={"channel": item.channel, "record": item.record, "running": True, "steps": []},
+        )
+        return session_id, record.id
+
+    def channel_append_step(self, item_id: str, step: dict[str, Any]) -> None:
+        """A step landed in the fabric's chain — show it now, not at the end."""
+        item = self.inbox.get(item_id)
+        if item is None:
+            return
+        data = dict(item.data or {})
+        steps = list(data.get("steps") or [])
+        steps.append(step)
+        item.data = {**data, "steps": steps, "envelopes": len(steps)}
+        self.inbox._save()          # noqa: SLF001 — same package, single writer
+
+    def channel_run_finish(self, item_id: str, result: dict[str, Any], session_id: str) -> None:
+        """Close the run: publish the decision, the plan and the gate (or seal it if ungated)."""
+        item = self.inbox.get(item_id)
+        if item is None:
+            return
+        data = dict(item.data or {})
+        steps = result.get("steps") or data.get("steps") or []
+        gated = bool(result.get("awaiting_signoff"))
+        decided = result.get("decision")
+        item.data = {**data,
+                     "agent": result.get("agent"), "decision": decided,
+                     "fabric_run": result.get("session_id"),
+                     "awaiting_signoff": gated, "plan": result.get("plan"),
+                     "capabilities": result.get("capabilities"),
+                     "running": False, "steps": steps, "envelopes": len(steps)}
+        item.title = (f"Sign off: {result.get('agent')} → {decided}" if gated
+                      else f"{item.data.get('channel', 'channel')}: {decided}")
+        item.body = (f"{len(steps)} steps sealed. "
+                     f"Signature: {(result.get('plan') or {}).get('signoff') or 'human sign-off'}."
+                     if gated else f"{len(steps)} steps sealed.")
+        self.inbox._save()          # noqa: SLF001
+        record = self.session_store.load(session_id)
+        if record is not None:
+            record.title = f"{item.data.get('channel', 'channel')}: {decided}"
+            self.session_store.save(record)
+
+    def channel_run_fail(self, item_id: str, error: str) -> None:
+        item = self.inbox.get(item_id)
+        if item is None:
+            return
+        item.data = {**(item.data or {}), "running": False, "error": error}
+        item.title = "Run failed"
+        item.body = error
+        self.inbox._save()          # noqa: SLF001
+
     def record_signature(self, item_id: str, approver: str, gate: dict[str, Any]) -> None:
         """Persist the signature ON the inbox item, so the resolved card survives a reload.
 

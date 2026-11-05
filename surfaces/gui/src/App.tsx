@@ -454,6 +454,15 @@ export function App() {
       .catch(() => setSessionInbox([]));
   }, [sessionId]);
 
+  // While a run is executing, poll so each sealed step appears as it lands.
+  useEffect(() => {
+    const items = [sessionInbox[0], signedItem].filter(Boolean) as InboxItem[];
+    const running = items.some((i) => (i.data as RunData | undefined)?.running);
+    if (!running) return;
+    const t = setInterval(refreshSigned, 700);
+    return () => clearInterval(t);
+  }, [sessionInbox, signedItem, refreshSigned]);
+
   // The rail's Progress shows THIS run's steps — the middle the user could not see before.
   const runRailSteps = useMemo(() => {
     const data = ((signedItem ?? sessionInbox[0])?.data ?? {}) as RunData;

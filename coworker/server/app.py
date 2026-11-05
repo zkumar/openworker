@@ -357,6 +357,8 @@ def create_app(manager: SessionManager) -> FastAPI:
         an agent from its declared card, executes the governed run and records the lesson.
         This is the harness end of the loop — no domain is named anywhere here.
         """
+        import threading
+
         from coworker.channels import ingest as channel_ingest_item
         from coworker.dispatch import CapabilityRouter
 
@@ -366,10 +368,21 @@ def create_app(manager: SessionManager) -> FastAPI:
             raise HTTPException(status_code=404, detail=f"unknown channel {name!r}")
         if item is None:
             return {"ok": False, "detail": "payload carried no work item"}
-        result = CapabilityRouter().route(item.record)
-        session_id = manager.record_channel_item(item, result)
-        return {"ok": True, "channel": item.channel, "record": item.record,
-                "result": result, "session_id": session_id}
+
+        # Open the run first, then dispatch in the background, so the UI can watch it.
+        session_id, inbox_id = manager.channel_run_start(item)
+
+        def run() -> None:
+            try:
+                result = CapabilityRouter().route(
+                    item.record, on_step=lambda step: manager.channel_append_step(inbox_id, step))
+                manager.channel_run_finish(inbox_id, result, session_id)
+            except Exception as exc:
+                manager.channel_run_fail(inbox_id, str(exc))
+
+        threading.Thread(target=run, daemon=True).start()
+        return {"ok": True, "channel": item.channel, "running": True,
+                "session_id": session_id, "inbox_id": inbox_id}
 
     @app.get("/v1/channels/recent")
     def recent_channels() -> dict[str, Any]:

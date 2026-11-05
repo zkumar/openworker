@@ -7,8 +7,10 @@ harness's memory. No domain pack is imported: the fabric is reached over its fro
 """
 from __future__ import annotations
 
+import json
 import os
-from typing import Any, Optional
+import threading
+from typing import Any, Callable, Optional
 
 import httpx
 
@@ -57,14 +59,45 @@ class CapabilityRouter:
                 best = (len(overlap), card)
         return best[1] if best else None
 
-    def route(self, item: dict) -> dict[str, Any]:
+    def _watch(self, session_id: str, on_step: Callable[[dict], None], stop: threading.Event) -> None:
+        """Relay the fabric's live step stream into the caller as it happens."""
+        try:
+            with httpx.Client(timeout=None) as client:
+                with client.stream("GET", f"{self._base}/api/runs/{session_id}/events",
+                                   headers=self._headers()) as response:
+                    for line in response.iter_lines():
+                        if stop.is_set():
+                            return
+                        if not line.startswith("data:"):
+                            continue
+                        try:
+                            payload = json.loads(line[5:].strip() or "{}")
+                        except json.JSONDecodeError:
+                            continue
+                        if payload.get("type") != "process.advanced":
+                            continue          # one row per transition; skills ride along as `skill`
+                        body = payload.get("payload") or {}      # the sink wraps events as {type, payload}
+                        on_step({"state_before": body.get("from"),
+                                 "state_after": body.get("to"),
+                                 "summary": body.get("skill"),
+                                 "type": "step"})
+        except Exception:
+            return                        # watching must never break the governed run
+
+    def route(self, item: dict, on_step: Callable[[dict], None] | None = None) -> dict[str, Any]:
         card = self.pick(self._get("/api/capabilities")["capabilities"], item)
         if card is None:
             return {"framed": False, "reason": "no agent's declared contract covers this item"}
         plan = self._get(f"/api/agents/{card['id']}/plan")
         start = self._post("/api/runs", {"agent_id": card["id"], "interactive_signoff": True})
         session_id = start["session_id"]
+        stop = threading.Event()
+        watcher = None
+        if on_step is not None:
+            watcher = threading.Thread(target=self._watch, args=(session_id, on_step, stop), daemon=True)
+            watcher.start()
         outcome = self._post(f"/api/runs/{session_id}/pursue", {"inputs": item})
+        stop.set()
         paused = bool(outcome.get("paused"))
         gates = self._get(f"/api/runs/{session_id}/pending-signoff").get("gates") or [] if paused else []
         chain = self._get(f"/api/runs/{session_id}/chain")
