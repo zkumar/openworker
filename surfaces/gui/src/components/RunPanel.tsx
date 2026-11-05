@@ -90,10 +90,12 @@ export function RunPanel({
       {/* the record */}
       <div className="px-4 py-3">
         <div className="mb-2 flex items-center justify-between">
-          <h3 className="text-[12px] font-semibold uppercase tracking-wide text-muted">Work item</h3>
+          <h3 className="text-[12px] font-semibold uppercase tracking-wide text-muted">
+            Work item <span className="normal-case text-faint">· {fields.length} fields</span>
+          </h3>
           {fields.length > 6 && (
             <button className="text-[12px] text-accent hover:underline" onClick={() => setAll((v) => !v)}>
-              {all ? "Show less" : `Show all ${fields.length}`}
+              {all ? "Show fewer fields" : `Show all ${fields.length} fields`}
             </button>
           )}
         </div>
