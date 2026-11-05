@@ -353,7 +353,9 @@ def create_app(manager: SessionManager) -> FastAPI:
         if item is None:
             return {"ok": False, "detail": "payload carried no work item"}
         result = CapabilityRouter().route(item.record)
-        return {"ok": True, "channel": item.channel, "record": item.record, "result": result}
+        session_id = manager.record_channel_item(item, result)
+        return {"ok": True, "channel": item.channel, "record": item.record,
+                "result": result, "session_id": session_id}
 
     @app.get("/v1/channels/recent")
     def recent_channels() -> dict[str, Any]:

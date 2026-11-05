@@ -5026,6 +5026,49 @@ class SessionManager:
             "runs": [r.to_dict() for r in self.task_store.runs(task_id)],
         }
 
+    def record_channel_item(self, item: Any, result: dict[str, Any]) -> str:
+        """Surface a dispatched channel work item as a real session (+ an approval when gated).
+
+        The session carries the item, the chosen agent and the sealed outcome, so the loop the
+        dispatcher ran is visible in the UI instead of only in an HTTP response. A gated agent
+        also parks an approval in the Inbox — the human sign-off the card advertises.
+        """
+        session_id = f"ch_{uuid.uuid4().hex[:12]}"
+        record = item.record
+        decided = result.get("decision")
+        agent = result.get("agent")
+        self.session_store.save(
+            SessionRecord(
+                session_id=session_id,
+                workspace=self.default_workspace or "",
+                model=self.model,
+                mode=self.mode.value,
+                messages=[
+                    {"role": "user",
+                     "content": f"Work item from **{item.channel}**\n\n```json\n{json.dumps(record, indent=2)}\n```"},
+                    {"role": "assistant",
+                     "content": (f"Routed to `{agent}` (chosen from its capability card) — "
+                                 f"**{decided}** after {result.get('envelopes')} sealed steps."
+                                 + (f" Next: `{result['plan']['signoff']}` sign-off."
+                                    if result.get("human_gate_required") and result.get("plan", {}).get("signoff")
+                                    else ""))},
+                ],
+                title=f"{item.channel}: {decided}",
+                agent="code",
+                origin=item.channel,
+                origin_label=f"{item.channel} work item",
+            )
+        )
+        if result.get("human_gate_required"):
+            self.inbox.add_approval(
+                session_id,
+                f"Sign off: {agent} → {decided}",
+                body=(f"{result.get('envelopes')} sealed steps. "
+                      f"Signature: {result.get('plan', {}).get('signoff') or 'human sign-off'}."),
+                data={"agent": agent, "decision": decided, "session_id": session_id},
+            )
+        return session_id
+
     def create_automation(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Create an automation directly from the GUI (the "New automation" / template flow).
         Mirrors the agent-facing `create_scheduled_task` validation, but binds the task to a

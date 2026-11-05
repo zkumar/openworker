@@ -44,3 +44,12 @@ def test_webhook_record_is_dispatched_and_sealed(client):
     assert body["result"]["agent"] == "payor.demo.prior_auth"
     assert body["result"]["decision"] == "denied"
     assert body["result"]["envelopes"] >= 4
+
+    # the loop is SURFACED, not just returned: a real session and a parked approval
+    session_id = body["session_id"]
+    sessions = client.get("/v1/sessions").json()["sessions"]
+    assert any(s["session_id"] == session_id for s in sessions), "no session for the work item"
+    inbox = client.get(f"/v1/inbox?session_id={session_id}").json()["items"]
+    assert inbox, "a gated agent must park an approval"
+    assert inbox[0]["kind"] == "approval"
+    assert "payor.demo.prior_auth" in inbox[0]["title"]
