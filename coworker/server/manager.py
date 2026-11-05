@@ -5238,7 +5238,7 @@ class SessionManager:
         d = item.data or {}
         steps = d.get("steps") or []
         sig = d.get("signature") or None
-        return {
+        receipt = {
             "receipt_version": 1,
             "work_item": {"channel": d.get("channel"),
                           "ref": self._record_ref(d.get("record")),
@@ -5265,6 +5265,8 @@ class SessionManager:
                          "chain_head": steps[-1].get("sha256") if steps else None},
             "harness": {"session_id": item.session_id, "inbox_id": item.id},
         }
+        from coworker.receipts import seal_receipt
+        return seal_receipt(receipt)
 
     def deliver_receipt(self, item_id: str) -> list[str]:
         """Emit the receipt through every egress; a failure is retried, never dropped."""

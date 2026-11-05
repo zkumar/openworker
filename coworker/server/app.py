@@ -374,6 +374,13 @@ def create_app(manager: SessionManager) -> FastAPI:
         # (e.g. a signature that arrives while the last step is still being appended).
         return manager.build_receipt(item)
 
+    @app.post("/v1/receipts/verify")
+    def verify_receipt_body(receipt: dict[str, Any]) -> dict[str, Any]:
+        """Verify a receipt someone received — detects any edit made after emission."""
+        from coworker.receipts import verify_receipt
+
+        return verify_receipt(receipt)
+
     @app.post("/v1/channels/{name}")
     def channel_ingest(name: str, body: dict) -> dict[str, Any]:
         """A work item arrives from a channel and is dispatched straight away.
