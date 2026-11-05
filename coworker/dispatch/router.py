@@ -84,13 +84,47 @@ class CapabilityRouter:
         except Exception:
             return                        # watching must never break the governed run
 
-    def route(self, item: dict, on_step: Callable[[dict], None] | None = None) -> dict[str, Any]:
+    def resume(self, run_id: str, record: dict, *, agent: str | None = None,
+               on_step: Callable[[dict], None] | None = None) -> dict[str, Any]:
+        """Re-drive a run that outlived its request: pursue resumes from the sealed prefix."""
+        stop = threading.Event()
+        if on_step is not None:
+            threading.Thread(target=self._watch, args=(run_id, on_step, stop), daemon=True).start()
+        outcome = self._post(f"/api/runs/{run_id}/pursue", {"inputs": record})
+        stop.set()
+        chain = self._get(f"/api/runs/{run_id}/chain")
+        steps = [{"type": e.get("type"), "summary": e.get("summary"),
+                  "state_before": e.get("state_before"), "state_after": e.get("state_after"),
+                  "sha256": e.get("sha256"), "at": e.get("timestamp")}
+                 for e in (chain.get("envelopes") or [])]
+        gates = self._get(f"/api/runs/{run_id}/pending-signoff").get("gates") or []
+        plan = {}
+        if agent:
+            try:
+                p = self._get(f"/api/agents/{agent}/plan")
+                plan = {"name": p["name"],
+                        "signoff": next((x.get("signoff") for x in p["transitions"]
+                                         if x.get("signoff")), None),
+                        "states": [s["name"] for s in p["states"]],
+                        "gate_state": next((x["to"] for x in p["transitions"]
+                                            if x.get("signoff")), None)}
+            except Exception:
+                plan = {}
+        return {"framed": True, "agent": agent, "awaiting_signoff": bool(gates), "gates": gates,
+                "plan": plan, "steps": steps, "envelopes": len(steps),
+                "decision": (outcome or {}).get("decision") or (gates[-1]["state_after"] if gates else None),
+                "session_id": run_id}
+
+    def route(self, item: dict, on_step: Callable[[dict], None] | None = None,
+              on_start: Callable[[str, str], None] | None = None) -> dict[str, Any]:
         card = self.pick(self._get("/api/capabilities")["capabilities"], item)
         if card is None:
             return {"framed": False, "reason": "no agent's declared contract covers this item"}
         plan = self._get(f"/api/agents/{card['id']}/plan")
         start = self._post("/api/runs", {"agent_id": card["id"], "interactive_signoff": True})
         session_id = start["session_id"]
+        if on_start is not None:
+            on_start(session_id, card["id"])      # record it now, so a crash can be resumed
         stop = threading.Event()
         watcher = None
         if on_step is not None:

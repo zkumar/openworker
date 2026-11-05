@@ -172,6 +172,7 @@ def create_app(manager: SessionManager) -> FastAPI:
     from coworker.channels import install_defaults
 
     install_defaults()
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         try:
@@ -188,6 +189,14 @@ def create_app(manager: SessionManager) -> FastAPI:
         await manager.aclose()  # stop gateway + close MCP connections on shutdown
 
     app = FastAPI(title="coworker", version="0.0.0", lifespan=lifespan)
+
+    # Durable restart: runs left mid-flight by a crash are re-driven, not lost.
+    # Started directly rather than via on_event, which FastAPI deprecates / no longer fires.
+    def _sweep_interrupted() -> None:
+        import time
+        time.sleep(1.0)                     # let the port bind and settings load first
+        manager.resume_interrupted_runs()
+    __import__("threading").Thread(target=_sweep_interrupted, daemon=True).start()
     api_token = os.environ.get("COWORKER_API_TOKEN", "")
     tokenless_paths = {
         "/v1/health",
@@ -375,7 +384,9 @@ def create_app(manager: SessionManager) -> FastAPI:
         def run() -> None:
             try:
                 result = CapabilityRouter().route(
-                    item.record, on_step=lambda step: manager.channel_append_step(inbox_id, step))
+                    item.record,
+                    on_step=lambda step: manager.channel_append_step(inbox_id, step),
+                    on_start=lambda run_id, agent: manager.channel_set_run(inbox_id, run_id, agent))
                 manager.channel_run_finish(inbox_id, result, session_id)
             except Exception as exc:
                 manager.channel_run_fail(inbox_id, str(exc))

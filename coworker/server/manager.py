@@ -5112,6 +5112,14 @@ class SessionManager:
         )
         return session_id, record.id
 
+    def channel_set_run(self, item_id: str, fabric_run: str, agent: str) -> None:
+        """Persist the fabric run id immediately — this is what makes a restart resumable."""
+        item = self.inbox.get(item_id)
+        if item is None:
+            return
+        item.data = {**(item.data or {}), "fabric_run": fabric_run, "agent": agent}
+        self.inbox._save()          # noqa: SLF001
+
     def channel_append_step(self, item_id: str, step: dict[str, Any]) -> None:
         """A step landed in the fabric's chain — show it now, not at the end."""
         item = self.inbox.get(item_id)
@@ -5148,6 +5156,38 @@ class SessionManager:
         if record is not None:
             record.title = f"{item.data.get('channel', 'channel')}: {decided}"
             self.session_store.save(record)
+
+    def resume_interrupted_runs(self) -> None:
+        """Durable restart: re-drive every run the process died inside of.
+
+        A run that was mid-flight when the sidecar stopped is left with running=True. The fabric
+        kept its sealed prefix, so `pursue` resumes it rather than replaying the work.
+        """
+        import threading
+
+        from coworker.dispatch import CapabilityRouter
+
+        for it in self.inbox.list():
+            data = it.data or {}
+            if not data.get("running"):
+                continue
+
+            def work(item=it, data=data):
+                record = data.get("record") or {}
+                fabric_run = data.get("fabric_run")
+                try:
+                    router = CapabilityRouter()
+                    if fabric_run:
+                        result = router.resume(fabric_run, record, agent=data.get("agent"),
+                                               on_step=lambda s: self.channel_append_step(item.id, s))
+                    else:
+                        result = router.route(record,
+                                              on_step=lambda s: self.channel_append_step(item.id, s))
+                    self.channel_run_finish(item.id, result, item.session_id)
+                except Exception as exc:
+                    self.channel_run_fail(item.id, f"resume failed: {exc}")
+
+            threading.Thread(target=work, daemon=True).start()
 
     def channel_run_fail(self, item_id: str, error: str) -> None:
         item = self.inbox.get(item_id)
