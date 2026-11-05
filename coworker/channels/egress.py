@@ -22,7 +22,20 @@ class FileEgress:
         ref = (receipt.get("work_item") or {}).get("ref") or receipt.get("harness", {}).get("inbox_id", "receipt")
         safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in str(ref))
         text = json.dumps(receipt, indent=2, sort_keys=True)
-        (self.directory / f"{safe}.json").write_text(text, encoding="utf-8")
+        target = self.directory / f"{safe}.json"
+        # Never let two different work items overwrite each other. Re-emitting the SAME item
+        # (after its signature) replaces its own file; a different item gets its own name.
+        if target.exists():
+            try:
+                other = json.loads(target.read_text(encoding="utf-8"))
+                mine = (receipt.get("harness") or {}).get("inbox_id")
+                theirs = (other.get("harness") or {}).get("inbox_id")
+                if theirs and mine and theirs != mine:
+                    suffix = str(mine)[:8]
+                    target = self.directory / f"{safe}__{suffix}.json"
+            except Exception:
+                pass
+        target.write_text(text, encoding="utf-8")
         with open(self.directory / "receipts.jsonl", "a", encoding="utf-8") as log:
             log.write(json.dumps(receipt, sort_keys=True) + "\n")
 

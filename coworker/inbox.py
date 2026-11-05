@@ -13,6 +13,8 @@ suspends the agent until that item is resolved.
 
 from __future__ import annotations
 
+import os
+
 import asyncio
 import json
 import threading
@@ -107,19 +109,35 @@ class InboxStore:
     # -- persistence ------------------------------------------------------------
     def _load(self) -> None:
         if self.path and self.path.is_file():
+            try:
+                if (self.path.stat().st_mode & 0o077):     # pre-existing loose file: tighten it
+                    os.chmod(self.path, 0o600)
+            except OSError:
+                pass
             data = json.loads(self.path.read_text(encoding="utf-8"))
             for raw in data.get("items", []):
                 item = InboxItem(**raw)
                 self._items[item.id] = item
 
     def _save(self) -> None:
+        """Atomic, owner-only. Work items carry regulated personal data, so:
+        - write a temp file, fsync, then replace (a crash never leaves a half-written inbox);
+        - create with mode 0600 (a default umask gives 0644, i.e. readable by every local user).
+        """
         if not self.path:
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
-            json.dumps({"items": [asdict(i) for i in self._items.values()]}, indent=2),
-            encoding="utf-8",
-        )
+        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+        payload = json.dumps({"items": [asdict(i) for i in self._items.values()]}, indent=2)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(payload)
+                f.flush()
+                os.fsync(f.fileno())
+        finally:
+            os.chmod(tmp, 0o600)
+        tmp.replace(self.path)
 
     # -- adding -----------------------------------------------------------------
     def add(

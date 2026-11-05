@@ -5085,10 +5085,22 @@ class SessionManager:
                 return item.session_id
         return None
 
-    @staticmethod
-    def _record_ref(record: dict[str, Any] | None) -> str:
-        for k, v in (record or {}).items():
-            if k.endswith("_id") and isinstance(v, str) and v:
+    # The reference the CALLER used for the request itself — never a subject id. Returning
+    # member_id here named receipts after the patient and made two requests for one member
+    # overwrite each other.
+    _REF_KEYS = ("request_id", "slr_id", "capa_id", "case_id", "ticket_id", "record_id", "ref")
+    _SUBJECT_KEYS = frozenset({"member_id", "patient_id", "provider_id", "provider_npi",
+                               "user_id", "owner_id", "author_id", "approver_id"})
+
+    @classmethod
+    def _record_ref(cls, record: dict[str, Any] | None) -> str:
+        rec = record or {}
+        for k in cls._REF_KEYS:
+            v = rec.get(k)
+            if isinstance(v, str) and v:
+                return v
+        for k, v in rec.items():
+            if k.endswith("_id") and k not in cls._SUBJECT_KEYS and isinstance(v, str) and v:
                 return v
         return ""
 
