@@ -5084,24 +5084,20 @@ class SessionManager:
                 return item.session_id
         return None
 
-    def append_channel_outcome(self, session_id: str, signed: dict[str, Any],
-                               approver: str = "") -> None:
-        """Write the signed verdict back into the session so the UI shows the result, not silence."""
-        record = self.session_store.load(session_id)
-        if record is None:
+    def record_signature(self, item_id: str, approver: str, gate: dict[str, Any]) -> None:
+        """Persist the signature ON the inbox item, so the resolved card survives a reload.
+
+        The conversation store appends by delta against its own count, which silently dropped a
+        record-level append; the inbox store is a plain record and is the reliable home for this.
+        """
+        item = self.inbox.get(item_id)
+        if item is None:
             return
-        gate = signed.get("signed") or {}
-        final = signed.get("final_state") or gate.get("state_after") or "complete"
-        who = approver or "a human approver"
-        from datetime import datetime as _dt
-        when = _dt.now().strftime("%H:%M")
-        record.messages.append({
-            "role": "assistant",
-            "content": (f"Signed by {who} at {when} — gate `{gate.get('state_before')} → "
-                        f"{gate.get('state_after')}` (`{gate.get('signoff')}`) sealed, and the "
-                        f"governed run finished **{final}**."),
-        })
-        self.session_store.save(record)
+        from datetime import datetime as _now
+        item.data = {**(item.data or {}),
+                     "signature": {"approver": approver,
+                                   "at": _now.now().strftime("%Y-%m-%d %H:%M"), **gate}}
+        self.inbox._save()          # noqa: SLF001 — same package, single writer
 
     def sign_channel_item(self, session_id: str) -> dict[str, Any]:
         """Complete the human gate for a channel item: the fabric seals the signature and finishes.

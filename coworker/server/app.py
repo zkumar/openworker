@@ -317,7 +317,8 @@ def create_app(manager: SessionManager) -> FastAPI:
             if session_id:
                 try:
                     signed = manager.sign_channel_item(session_id)
-                    manager.append_channel_outcome(session_id, signed, approver)
+                    manager.record_signature(item_id, approver or "a human approver",
+                                             (signed or {}).get("signed") or {})
                 except Exception as exc:      # relay the fabric's refusal, never swallow it
                     return {"ok": ok, "signed": None, "sign_error": str(exc)}
         return {"ok": ok, "signed": signed}
