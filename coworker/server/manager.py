@@ -5051,7 +5051,8 @@ class SessionManager:
                 mode=self.mode.value,
                 messages=[
                     {"role": "user",
-                     "content": f"Work item from **{item.channel}**\n\n```json\n{json.dumps(record, indent=2)}\n```"},
+                     "content": f"Work item received from channel: {item.channel}\n\n"
+                                f"{json.dumps(record, indent=2)}"},
                     {"role": "assistant",
                      "content": (f"Routed to `{agent}` (chosen from its capability card) — "
                                  f"**{decided}** after {result.get('envelopes')} sealed steps."
@@ -5083,17 +5084,22 @@ class SessionManager:
                 return item.session_id
         return None
 
-    def append_channel_outcome(self, session_id: str, signed: dict[str, Any]) -> None:
+    def append_channel_outcome(self, session_id: str, signed: dict[str, Any],
+                               approver: str = "") -> None:
         """Write the signed verdict back into the session so the UI shows the result, not silence."""
         record = self.session_store.load(session_id)
         if record is None:
             return
         gate = signed.get("signed") or {}
         final = signed.get("final_state") or gate.get("state_after") or "complete"
+        who = approver or "a human approver"
+        from datetime import datetime as _dt
+        when = _dt.now().strftime("%H:%M")
         record.messages.append({
             "role": "assistant",
-            "content": (f"Signed by a human — gate `{gate.get('state_before')} → {gate.get('state_after')}` "
-                        f"(`{gate.get('signoff')}`) sealed, and the governed run finished **{final}**."),
+            "content": (f"Signed by {who} at {when} — gate `{gate.get('state_before')} → "
+                        f"{gate.get('state_after')}` (`{gate.get('signoff')}`) sealed, and the "
+                        f"governed run finished **{final}**."),
         })
         self.session_store.save(record)
 

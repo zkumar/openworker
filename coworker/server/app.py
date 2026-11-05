@@ -309,6 +309,7 @@ def create_app(manager: SessionManager) -> FastAPI:
         # Routes through resolve_inbox so a restart-orphaned prompt durably resumes its turn.
         resolution = str(body.get("resolution", "deny"))
         ok = await manager.resolve_inbox(item_id, resolution)
+        approver = str(body.get("approver") or "").strip()
         signed = None
         if ok and resolution not in ("deny", "reject"):
             # approving a channel gate is a SIGNATURE: the fabric seals it and the run finishes
@@ -316,7 +317,7 @@ def create_app(manager: SessionManager) -> FastAPI:
             if session_id:
                 try:
                     signed = manager.sign_channel_item(session_id)
-                    manager.append_channel_outcome(session_id, signed)
+                    manager.append_channel_outcome(session_id, signed, approver)
                 except Exception as exc:      # relay the fabric's refusal, never swallow it
                     return {"ok": ok, "signed": None, "sign_error": str(exc)}
         return {"ok": ok, "signed": signed}

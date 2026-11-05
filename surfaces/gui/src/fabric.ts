@@ -13,6 +13,18 @@ const store = (): Storage | null => {
   try { return (globalThis as any).localStorage ?? null; } catch { return null; }
 };
 
+/** The signed-in fabric person (from the JWT), so a signature can name its signer. */
+export function fabricUser(): string | null {
+  const token = fabricToken();
+  if (!token) return null;
+  try {
+    const payload = JSON.parse(atob(token.split(".")[1] ?? ""));
+    return String(payload.preferred_username || payload.sub || "") || null;
+  } catch {
+    return null;
+  }
+}
+
 export const fabricToken = (): string | null => store()?.getItem(TOKEN_KEY) ?? null;
 export const isFabricSignedIn = (): boolean => !!fabricToken();
 

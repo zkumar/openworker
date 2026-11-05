@@ -52,6 +52,7 @@ import type {
 import { fullPersonaName, isProjectScoped } from "./personaScope";
 import { baseName } from "./paths";
 import { itemsFromMessages } from "./itemsFromMessages";
+import { fabricUser } from "./fabric";
 import { addTurnUsage, emptyUsage, usageFromMessages } from "./usage";
 import { streamMode } from "./streamGate";
 import { InboxItemCard, approvalItemFromParked } from "./components/InboxItemCard";
@@ -420,6 +421,10 @@ export function App() {
   // unattended session's blocking question/approval can be answered in context (resolving the
   // same item the Inbox shows; first responder wins).
   const [sessionInbox, setSessionInbox] = useState<InboxItem[]>([]);
+  // The card must not vanish on approval: keep a resolved marker naming the signer and time.
+  const [signedApproval, setSignedApproval] = useState<
+    { who: string; when: string; gate: string; signoff: string; sha: string } | null
+  >(null);
   // Whether the active session is Unattended — when true, the agent's prompts route to the Inbox,
   // so we suppress the inline live cards (the Inbox / answer-in-context path shows them instead).
   // A ref too, because the WS event handler closes over stale state.
@@ -437,7 +442,19 @@ export function App() {
     if (on) announceInboxUnlock();
   };
   const resolveSessionInbox = async (id: string, resolution: string) => {
-    await resolveInboxItem(id, resolution);
+    const who = fabricUser() || "a human approver";
+    const outcome = await resolveInboxItem(id, resolution, who);
+    // Only claim a signature when the fabric actually sealed one — never optimistically.
+    const sealed = (outcome?.signed as { signed?: Record<string, string> } | undefined)?.signed;
+    if (outcome?.signed) {
+      setSignedApproval({
+        who,
+        when: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        gate: sealed ? `${sealed.state_before} → ${sealed.state_after}` : "",
+        signoff: sealed?.signoff ?? "",
+        sha: sealed?.sha256 ? `${sealed.sha256.slice(0, 12)}…` : "",
+      });
+    }
     getInbox(sessionId, "pending").then(setSessionInbox).catch(() => setSessionInbox([]));
     // the resolved gate writes its signed verdict into the session — show it without a reload
     getSessionMessages(sessionId).then((m) => setItems(itemsFromMessages(m))).catch(() => {});
@@ -2174,6 +2191,16 @@ export function App() {
                       <InboxItemCard item={sessionInbox[0]} onResolve={resolveSessionInbox} compact />
                     );
                   })()
+                ) : signedApproval ? (
+                  <div className="bubble-assistant" data-testid="approval-signed">
+                    <div className="who">APPROVAL — SIGNED</div>
+                    <div>
+                      ✓ Signed by <strong>{signedApproval.who}</strong> at {signedApproval.when}
+                      {signedApproval.gate ? ` — gate ${signedApproval.gate}` : ""}
+                      {signedApproval.signoff ? ` (${signedApproval.signoff})` : ""} sealed
+                      {signedApproval.sha ? `, evidence ${signedApproval.sha}` : ""}.
+                    </div>
+                  </div>
                 ) : undefined
               }
             />

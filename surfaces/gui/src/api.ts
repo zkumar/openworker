@@ -1562,11 +1562,12 @@ export async function getInbox(sessionId?: string, state?: string): Promise<Inbo
 export async function resolveInboxItem(
   id: string,
   resolution: string,
-): Promise<{ ok: boolean }> {
+  approver?: string,
+): Promise<{ ok: boolean; signed?: unknown; sign_error?: string }> {
   const res = await fetch(`${httpBase()}/v1/inbox/${encodeURIComponent(id)}/resolve`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ resolution }),
+    body: JSON.stringify({ resolution, approver }),
   });
   return res.json();
 }
