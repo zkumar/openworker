@@ -5231,10 +5231,13 @@ class SessionManager:
                           "received_at": item.created_at},
             "agent": d.get("agent"),
             "status": ("sealed" if sig else
+                       "rejected" if d.get("not_found") else
                        "error" if d.get("error") else
                        "awaiting_signature" if d.get("awaiting_signoff") else "unknown"),
             "decision": d.get("decision"),
             "error": d.get("error") or None,
+            "reason": ("request id not found in the pack's records" if d.get("not_found")
+                       else None),
             "sealed": bool(sig),
             "awaiting_signoff": bool(d.get("awaiting_signoff")) and not sig,
             "signature": sig,
@@ -5268,7 +5271,8 @@ class SessionManager:
             if (it.data or {}).get("receipt_pending"):
                 self.deliver_receipt(it.id)
 
-    def channel_run_fail(self, item_id: str, error: str, retryable: bool = True) -> None:
+    def channel_run_fail(self, item_id: str, error: str, retryable: bool = True,
+                         not_found: bool = False) -> None:
         item = self.inbox.get(item_id)
         if item is None:
             return
@@ -5278,11 +5282,17 @@ class SessionManager:
         else:
             self.runs.finish(item_id, "failed")      # a refusal cannot be fixed by repeating it
             state = "failed"
-        item.data = {**(item.data or {}), "running": False, "error": error,
+        item.data = {**(item.data or {}), "running": False,
+                     "error": None if not_found else error,
+                     "decision": "not_found" if not_found else (item.data or {}).get("decision"),
+                     "not_found": not_found,
                      "retrying": state == "dispatched"}
-        # a refusal is not a failure: the input was rejected, nothing broke
+        # "not found" is a DECISION about the request, not an error about our system
         final = state != "dispatched"
-        item.title = "Run failed" if state == "dispatched" else f"Rejected: {error[:60]}"
+        if not_found:
+            item.title = "Not found — rejected"
+        else:
+            item.title = "Run failed" if state == "dispatched" else f"Rejected: {error[:60]}"
         item.body = error
         self.inbox._save()          # noqa: SLF001 — persist before emitting
         self.deliver_receipt(item_id)   # the channel gets a JSON answer either way

@@ -15,6 +15,8 @@ export interface RunData {
   running?: boolean;
   error?: string;
   retrying?: boolean;
+  not_found?: boolean;
+  reason?: string | null;
   plan?: Plan;
   record?: Record<string, unknown>;
   fabric_run?: string;
@@ -30,9 +32,15 @@ export interface RunData {
 }
 
 const HIDDEN = new Set(["request_id", "capa_id", "slr_id"]);
+// never show a raw enum to a person
+const LABEL: Record<string, string> = {
+  not_found: "not found",
+  awaiting_signature: "awaiting signature",
+};
 const TONE: Record<string, string> = {
   approved: "text-ok", closed: "text-ok", denied: "text-danger",
   escalated: "text-warn", pended: "text-warn", revise: "text-warn",
+  not_found: "text-warn",
 };
 
 // "part11_single" is a CFR term; say what it means.
@@ -81,14 +89,26 @@ export function RunPanel({
             in progress…
           </span>
         ) : (
-          <span className={"text-[13px] font-semibold " + tone}>{decision}</span>
+          <span className={"text-[13px] font-semibold " + tone}>
+            {LABEL[String(decision)] ?? decision}
+          </span>
         )}
       </header>
 
       {/* the answer, in one sentence a non-technical reviewer can act on */}
       {!data.running && (
         <div className={"px-4 py-3 " + (data.error ? "text-danger" : "")}>
-          {data.error ? (
+          {data.not_found ? (
+            <>
+              <div className="text-[14px] font-semibold text-ink">
+                Decision: <span className="text-warn">{LABEL.not_found}</span>
+              </div>
+              <div className="mt-0.5 text-[13px] text-muted">
+                This request is not in the record system, so it was rejected. Nothing needs to be
+                signed.
+              </div>
+            </>
+          ) : data.error ? (
             <>
               <div className="text-[14px] font-semibold">
                 {data.retrying === false ? "This request was rejected" : "This request could not run"}

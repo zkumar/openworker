@@ -405,7 +405,8 @@ def create_app(manager: SessionManager) -> FastAPI:
                     on_start=lambda run_id, agent: manager.channel_set_run(inbox_id, run_id, agent))
                 manager.channel_run_finish(inbox_id, result, session_id)
             except FabricRefusal as exc:                 # actionable: show the fabric's own words
-                manager.channel_run_fail(inbox_id, exc.detail, retryable=exc.retryable)
+                manager.channel_run_fail(inbox_id, exc.detail, retryable=exc.retryable,
+                                         not_found=(exc.status == 404))
             except Exception as exc:
                 manager.channel_run_fail(inbox_id, str(exc))
 
