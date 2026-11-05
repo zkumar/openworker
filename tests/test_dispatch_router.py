@@ -30,6 +30,7 @@ def _fabric_up() -> bool:
 @pytest.mark.skipif(not _fabric_up(), reason="no fabric at :8766")
 def test_route_executes_the_governed_run_and_seals():
     result = CapabilityRouter(learn=False).route({
+        "request_id": "PA-2026-001",
         "member_id": "MEM001", "procedure_code": "27447", "provider_npi": "1234567890",
         "request_date": "2026-01-15", "requested_service_date": "2026-02-15",
         "requested_units": 1,
@@ -37,4 +38,5 @@ def test_route_executes_the_governed_run_and_seals():
     })
     assert result["agent"] == "payor.demo.prior_auth"
     assert result["decision"] == "denied"
-    assert result["envelopes"] >= 4
+    assert result["awaiting_signoff"] is True, "a gated agent must pause for a human"
+    assert result["gates"][0]["signoff"] == "part11_single"

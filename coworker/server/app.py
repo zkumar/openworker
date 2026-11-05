@@ -307,8 +307,18 @@ def create_app(manager: SessionManager) -> FastAPI:
     async def resolve_inbox_item(item_id: str, body: dict) -> dict[str, Any]:
         # Idempotent + first-responder-wins: ok=False means it was already resolved elsewhere.
         # Routes through resolve_inbox so a restart-orphaned prompt durably resumes its turn.
-        ok = await manager.resolve_inbox(item_id, str(body.get("resolution", "deny")))
-        return {"ok": ok}
+        resolution = str(body.get("resolution", "deny"))
+        ok = await manager.resolve_inbox(item_id, resolution)
+        signed = None
+        if ok and resolution not in ("deny", "reject"):
+            # approving a channel gate is a SIGNATURE: the fabric seals it and the run finishes
+            session_id = manager.session_of_inbox_item(item_id)
+            if session_id:
+                try:
+                    signed = manager.sign_channel_item(session_id)
+                except Exception as exc:      # relay the fabric's refusal, never swallow it
+                    return {"ok": ok, "signed": None, "sign_error": str(exc)}
+        return {"ok": ok, "signed": signed}
 
     @app.get("/v1/subscriptions")
     def subscriptions() -> dict[str, Any]:

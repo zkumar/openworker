@@ -32,6 +32,26 @@ def test_empty_payload_carries_no_work(client):
 
 
 @pytest.mark.skipif(not _fabric_up(), reason="no fabric at :8766")
+def test_approving_the_inbox_item_signs_the_governed_run(client):
+    body = client.post("/v1/channels/webhook", json={"record": {
+        "request_id": "PA-2026-001",
+        "member_id": "MEM001", "procedure_code": "27447", "provider_npi": "1234567890",
+        "request_date": "2026-01-15", "requested_service_date": "2026-02-15",
+        "requested_units": 1,
+        "clinical_notes": "45yo male, severe right knee OA, conservative care failed.",
+    }}).json()
+    session_id = body["session_id"]
+    approval = client.get(f"/v1/inbox?session_id={session_id}").json()["items"][0]
+    assert approval["kind"] == "approval"
+    resolved = client.post(f"/v1/inbox/{approval['id']}/resolve",
+                           json={"resolution": "approve"}).json()
+    assert resolved["ok"] is True
+    assert resolved.get("sign_error") is None
+    assert resolved["signed"]["final_state"] in ("denied", "pended", "approved"), \
+        "the signature completes the run"
+
+
+@pytest.mark.skipif(not _fabric_up(), reason="no fabric at :8766")
 def test_webhook_record_is_dispatched_and_sealed(client):
     response = client.post("/v1/channels/webhook", json={"record": {
         "member_id": "MEM001", "procedure_code": "27447", "provider_npi": "1234567890",
@@ -42,8 +62,7 @@ def test_webhook_record_is_dispatched_and_sealed(client):
     body = response.json()
     assert body["ok"] is True and body["channel"] == "webhook"
     assert body["result"]["agent"] == "payor.demo.prior_auth"
-    assert body["result"]["decision"] == "denied"
-    assert body["result"]["envelopes"] >= 4
+    assert body["result"]["awaiting_signoff"] is True, "a gated agent must pause, not self-sign"
 
     # the loop is SURFACED, not just returned: a real session and a parked approval
     session_id = body["session_id"]

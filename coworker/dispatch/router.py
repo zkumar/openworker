@@ -62,14 +62,19 @@ class CapabilityRouter:
         if card is None:
             return {"framed": False, "reason": "no agent's declared contract covers this item"}
         plan = self._get(f"/api/agents/{card['id']}/plan")
-        session_id = self._post("/api/runs", {"agent_id": card["id"]})["session_id"]
+        start = self._post("/api/runs", {"agent_id": card["id"], "interactive_signoff": True})
+        session_id = start["session_id"]
         outcome = self._post(f"/api/runs/{session_id}/pursue", {"inputs": item})
+        paused = bool(outcome.get("paused"))
+        gates = self._get(f"/api/runs/{session_id}/pending-signoff").get("gates") or [] if paused else []
         chain = self._get(f"/api/runs/{session_id}/chain")
         result = {
             "framed": True,
             "agent": card["id"],
             "human_gate_required": card.get("human_gate_required"),
-            "decision": outcome.get("decision"),
+            "awaiting_signoff": paused,
+            "gates": gates,
+            "decision": outcome.get("decision") or (gates[-1]["state_after"] if gates else None),
             "plan": {"name": plan["name"],
                      "signoff": next((t.get("signoff") for t in plan["transitions"]
                                       if t.get("signoff")), None)},

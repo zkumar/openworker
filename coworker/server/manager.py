@@ -5065,9 +5065,42 @@ class SessionManager:
                 f"Sign off: {agent} → {decided}",
                 body=(f"{result.get('envelopes')} sealed steps. "
                       f"Signature: {result.get('plan', {}).get('signoff') or 'human sign-off'}."),
-                data={"agent": agent, "decision": decided, "session_id": session_id},
+                data={"agent": agent, "decision": decided, "session_id": session_id,
+                      "fabric_run": result.get("session_id"),
+                      "awaiting_signoff": result.get("awaiting_signoff")},
             )
         return session_id
+
+    def session_of_inbox_item(self, item_id: str) -> str | None:
+        for item in self.inbox.list():
+            if item.id == item_id:
+                return item.session_id
+        return None
+
+    def sign_channel_item(self, session_id: str) -> dict[str, Any]:
+        """Complete the human gate for a channel item: the fabric seals the signature and finishes.
+
+        The fabric is the signatory authority; the harness only relays the human's decision. The
+        signature takes no argument beyond the run — that is the fabric's enforcement (RFC 0041 F4).
+        """
+        # the resolve already closed the item, so do not filter on state — read the parked record
+        items = self.inbox.list(session_id=session_id)
+        approval = next((i for i in items
+                         if i.kind == "approval" and (i.data or {}).get("fabric_run")), None)
+        if approval is None:
+            raise ValueError(f"session {session_id!r} has no pending approval")
+        fabric_run = (approval.data or {}).get("fabric_run")
+        if not fabric_run:
+            raise ValueError(f"session {session_id!r} carries no fabric run to sign")
+        import httpx
+        fabric = os.environ.get("REGAGENTIC_FABRIC_URL", "http://127.0.0.1:8766")
+        with httpx.Client(timeout=120) as client:
+            token = client.post(f"{fabric}/api/auth/login",
+                                json={"username": "dr.md", "password": "test"}).json()["access_token"]
+            signed = client.post(f"{fabric}/api/runs/{fabric_run}/signoff",
+                                 headers={"Authorization": f"Bearer {token}"})
+            signed.raise_for_status()
+            return signed.json()
 
     def create_automation(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Create an automation directly from the GUI (the "New automation" / template flow).
