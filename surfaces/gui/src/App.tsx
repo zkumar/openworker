@@ -447,11 +447,15 @@ export function App() {
   const refreshSigned = useCallback(() => {
     getInbox(sessionId)
       .then((items) => {
-        setSessionInbox(items.filter((i) => i.state === "pending"));
-        const signed = items
-          .filter((i) => i.kind === "approval" && (i.data as { signature?: unknown } | undefined)?.signature)
+        // A run is any item carrying a record — signed, rejected or failed alike. Keying on the
+        // signature alone made a rejected run look like an empty session.
+        const runs = items.filter((i) => ((i.data ?? {}) as RunData).record);
+        const pendingRun = runs.find((i) => i.state === "pending") ?? null;
+        setSessionInbox(pendingRun ? [pendingRun] : []);
+        const latest = runs
+          .filter((i) => i.state !== "pending")
           .sort((a, b) => String(b.resolved_at ?? "").localeCompare(String(a.resolved_at ?? "")))[0];
-        setSignedItem(signed ?? null);
+        setSignedItem(latest ?? null);
       })
       .catch(() => setSessionInbox([]));
   }, [sessionId]);
@@ -1946,7 +1950,10 @@ export function App() {
             {/* The run leads the view: record, process, live steps and gate sit above the chat. */}
             {sessionInbox[0] && ((sessionInbox[0].data ?? {}) as RunData).record ? (
               <RunPanel
-                data={{ ...(sessionInbox[0].data as RunData), error: signError ?? undefined }}
+                data={{
+                  ...(sessionInbox[0].data as RunData),
+                  error: signError ?? (sessionInbox[0].data as RunData)?.error,
+                }}
                 pending
                 onDecide={(d) => void resolveSessionInbox(sessionInbox[0].id, d)}
               />

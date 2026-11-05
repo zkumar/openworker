@@ -56,7 +56,7 @@ export function RunPanel({
   pending: boolean;
   onDecide: (decision: "once" | "deny") => void;
 }) {
-  const [all, setAll] = useState(false);
+  const [all, setAll] = useState(true);
   const fields = Object.entries(data.record ?? {}).filter(([k]) => !HIDDEN.has(k));
   const shown = all ? fields : fields.slice(0, 6);
   const steps = data.steps ?? [];
@@ -113,7 +113,7 @@ export function RunPanel({
       <div className="border-t border-line px-4 py-3">
         <div className="mb-2 flex items-center justify-between">
           <h3 className="text-[12px] font-semibold uppercase tracking-wide text-muted">
-            Request <span className="normal-case text-faint">· {fields.length} fields</span>
+            Request <span className="normal-case text-faint">· {shown.length} of {fields.length} fields shown</span>
           </h3>
           {fields.length > 6 && (
             <button className="text-[12px] text-accent hover:underline" onClick={() => setAll((v) => !v)}>
@@ -166,7 +166,7 @@ export function RunPanel({
       </footer>
 
       {/* everything a technical audience needs, folded away */}
-      <details className="border-t border-line px-4 py-3">
+      <details className="border-t border-line px-4 py-3" open>
         <summary className="cursor-pointer text-[12px] text-muted">Technical details</summary>
         <div className="mt-2 space-y-3 text-[12px]">
           {steps.length > 0 && (

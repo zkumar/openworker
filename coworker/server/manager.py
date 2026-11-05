@@ -5230,7 +5230,11 @@ class SessionManager:
                           "ref": self._record_ref(d.get("record")),
                           "received_at": item.created_at},
             "agent": d.get("agent"),
+            "status": ("sealed" if sig else
+                       "error" if d.get("error") else
+                       "awaiting_signature" if d.get("awaiting_signoff") else "unknown"),
             "decision": d.get("decision"),
+            "error": d.get("error") or None,
             "sealed": bool(sig),
             "awaiting_signoff": bool(d.get("awaiting_signoff")) and not sig,
             "signature": sig,
@@ -5277,8 +5281,15 @@ class SessionManager:
         item.data = {**(item.data or {}), "running": False, "error": error,
                      "retrying": state == "dispatched"}
         # a refusal is not a failure: the input was rejected, nothing broke
+        final = state != "dispatched"
         item.title = "Run failed" if state == "dispatched" else f"Rejected: {error[:60]}"
         item.body = error
+        self.inbox._save()          # noqa: SLF001 — persist before emitting
+        self.deliver_receipt(item_id)   # the channel gets a JSON answer either way
+        if final:
+            # close the item: a rejected run must not sit there asking for a signature
+            item.state = "resolved"
+            item.resolution = "rejected"
         self.inbox._save()          # noqa: SLF001
 
     def record_signature(self, item_id: str, approver: str, gate: dict[str, Any]) -> None:
