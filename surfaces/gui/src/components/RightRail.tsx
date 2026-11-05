@@ -123,7 +123,7 @@ export function RightRail({
   });
   const autoOpenedProgress = useRef(false);
   useEffect(() => {
-    if (!isLead && running && todo.length > 0 && !autoOpenedProgress.current) {
+    if (!isLead && todo.length > 0 && !autoOpenedProgress.current) {   // open for a finished run too
       autoOpenedProgress.current = true;
       setOpen((prev) => ({ ...prev, progress: true }));
     }

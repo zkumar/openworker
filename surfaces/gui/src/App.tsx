@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { useTranslation } from "react-i18next";
 import {
   announceInboxUnlock,
@@ -453,6 +453,15 @@ export function App() {
       })
       .catch(() => setSessionInbox([]));
   }, [sessionId]);
+
+  // The rail's Progress shows THIS run's steps — the middle the user could not see before.
+  const runRailSteps = useMemo(() => {
+    const data = ((signedItem ?? sessionInbox[0])?.data ?? {}) as RunData;
+    return (data.steps ?? []).map((s) => ({
+      content: `${s.state_before ?? "?"} → ${s.state_after ?? "?"} · ${s.summary ?? s.type ?? ""}`,
+      status: "done" as const,
+    }));
+  }, [signedItem, sessionInbox]);
 
   const resolveSessionInbox = async (id: string, resolution: string) => {
     const who = fabricUser() || "a human approver";
@@ -2212,7 +2221,7 @@ export function App() {
             sessionId={sessionId}
             refreshKey={browserRefreshKey}
             toolNames={items.filter((i) => i.kind === "tool").map((i: any) => i.name)}
-            todo={todo}
+            todo={runRailSteps.length ? runRailSteps : todo}
             running={running}
             onPreviewChange={onArtifactPreview}
             // Universal scratch (UX-036): every session has a scratch surface, so the

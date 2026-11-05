@@ -68,6 +68,12 @@ class CapabilityRouter:
         paused = bool(outcome.get("paused"))
         gates = self._get(f"/api/runs/{session_id}/pending-signoff").get("gates") or [] if paused else []
         chain = self._get(f"/api/runs/{session_id}/chain")
+        steps = [
+            {"type": e.get("type"), "summary": e.get("summary"),
+             "state_before": e.get("state_before"), "state_after": e.get("state_after"),
+             "sha256": e.get("sha256"), "at": e.get("timestamp")}
+            for e in (chain.get("envelopes") or [])
+        ]
         result = {
             "framed": True,
             "agent": card["id"],
@@ -81,7 +87,8 @@ class CapabilityRouter:
                      "states": [s["name"] for s in plan["states"]],
                      "gate_state": next((t["to"] for t in plan["transitions"]
                                          if t.get("signoff")), None)},
-            "envelopes": len(chain.get("envelopes") or []),
+            "envelopes": len(steps),
+            "steps": steps,
             "session_id": session_id,
         }
         if self._learn:

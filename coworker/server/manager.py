@@ -5071,6 +5071,7 @@ class SessionManager:
                       "channel": item.channel,
                       "record": record,
                       "envelopes": result.get("envelopes"),
+                      "steps": result.get("steps"),
                       "capabilities": result.get("capabilities"),
                       "plan": result.get("plan")},
             )
@@ -5097,6 +5098,16 @@ class SessionManager:
                                    "at": _now.now().strftime("%Y-%m-%d %H:%M"), **gate}}
         self.inbox._save()          # noqa: SLF001 — same package, single writer
 
+    def record_steps(self, item_id: str, steps: list[dict[str, Any]]) -> None:
+        """Keep the item's step timeline current after the signature appends its final step."""
+        if not steps:
+            return
+        item = self.inbox.get(item_id)
+        if item is None:
+            return
+        item.data = {**(item.data or {}), "steps": steps, "envelopes": len(steps)}
+        self.inbox._save()          # noqa: SLF001 — same package, single writer
+
     def sign_channel_item(self, session_id: str) -> dict[str, Any]:
         """Complete the human gate for a channel item: the fabric seals the signature and finishes.
 
@@ -5120,7 +5131,20 @@ class SessionManager:
             signed = client.post(f"{fabric}/api/runs/{fabric_run}/signoff",
                                  headers={"Authorization": f"Bearer {token}"})
             signed.raise_for_status()
-            return signed.json()
+            out = signed.json()
+            try:                      # the signature appends the final sealed step
+                chain = client.get(f"{fabric}/api/runs/{fabric_run}/chain",
+                                   headers={"Authorization": f"Bearer {token}"})
+                out["steps"] = [
+                    {"type": e.get("type"), "summary": e.get("summary"),
+                     "state_before": e.get("state_before"), "state_after": e.get("state_after"),
+                     "sha256": e.get("sha256"), "at": e.get("timestamp")}
+                    for e in ((chain.json().get("envelopes")) or [])
+                ]
+                out["envelopes"] = len(out["steps"])
+            except Exception:
+                pass
+            return out
 
     def create_automation(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Create an automation directly from the GUI (the "New automation" / template flow).

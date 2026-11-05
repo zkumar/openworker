@@ -13,6 +13,10 @@ export interface RunData {
   envelopes?: number;
   awaiting_signoff?: boolean;
   plan?: Plan;
+  steps?: {
+    type?: string; summary?: string; state_before?: string; state_after?: string;
+    sha256?: string; at?: string;
+  }[];
   record?: Record<string, unknown>;
   fabric_run?: string;
   signature?: {
@@ -95,7 +99,7 @@ export function RunPanel({
       {states.length > 0 && (
         <div className="border-t border-line px-4 py-3">
           <h3 className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-muted">
-            Process · {data.plan?.name}
+            Declared process · {data.plan?.name}
           </h3>
           <ol className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px]">
             {states.map((s, i) => (
@@ -111,6 +115,30 @@ export function RunPanel({
                   {s.replace(/_/g, " ")}
                 </span>
                 {i < states.length - 1 && <span className="text-faint">→</span>}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      {/* what actually happened between arrival and this point */}
+      {(data.steps?.length ?? 0) > 0 && (
+        <div className="border-t border-line px-4 py-3">
+          <h3 className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-muted">
+            Executed · {data.steps?.length} sealed steps
+          </h3>
+          <ol className="space-y-1.5">
+            {data.steps?.map((s, i) => (
+              <li key={`${s.sha256}-${i}`} className="flex items-baseline gap-2 text-[12px]">
+                <span className="w-4 shrink-0 text-right text-faint">{i + 1}</span>
+                <span className="shrink-0 text-ink">
+                  {s.state_before ?? "?"} <span className="text-faint">→</span> {s.state_after ?? "?"}
+                </span>
+                <span className="min-w-0 truncate text-muted" title={s.summary}>{s.summary ?? s.type}</span>
+                <span className="flex-1" />
+                {s.sha256 && (
+                  <span className="shrink-0 font-mono text-[11px] text-faint">{s.sha256.slice(0, 8)}</span>
+                )}
               </li>
             ))}
           </ol>
