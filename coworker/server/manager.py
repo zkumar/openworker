@@ -218,6 +218,7 @@ class SessionManager:
             base = state_dir()
         base.mkdir(parents=True, exist_ok=True)
 
+        self._active_runs: set[str] = set()   # inbox ids this process owns right now
         self.memory_store: MemoryStore = SQLiteMemoryStore(base / "coworker.db")
         # MEMORY-SPEC §4.3/§6: the on/off switch + the user's standing rules. Settings-
         # level, outside the memory table; read at engine build time.
@@ -5110,6 +5111,7 @@ class SessionManager:
             body="The governed run is executing…",
             data={"channel": item.channel, "record": item.record, "running": True, "steps": []},
         )
+        self._active_runs.add(record.id)     # owned by this process — the sweeper must skip it
         return session_id, record.id
 
     def channel_set_run(self, item_id: str, fabric_run: str, agent: str) -> None:
@@ -5148,6 +5150,7 @@ class SessionManager:
                      "running": False, "steps": steps, "envelopes": len(steps)}
         item.title = (f"Sign off: {result.get('agent')} → {decided}" if gated
                       else f"{item.data.get('channel', 'channel')}: {decided}")
+        self._active_runs.discard(item_id)
         item.body = (f"{len(steps)} steps sealed. "
                      f"Signature: {(result.get('plan') or {}).get('signoff') or 'human sign-off'}."
                      if gated else f"{len(steps)} steps sealed.")
@@ -5169,8 +5172,8 @@ class SessionManager:
 
         for it in self.inbox.list():
             data = it.data or {}
-            if not data.get("running"):
-                continue
+            if not data.get("running") or it.id in self._active_runs:
+                continue     # running here already: not interrupted, just busy
 
             def work(item=it, data=data):
                 record = data.get("record") or {}
@@ -5193,6 +5196,7 @@ class SessionManager:
         item = self.inbox.get(item_id)
         if item is None:
             return
+        self._active_runs.discard(item_id)
         item.data = {**(item.data or {}), "running": False, "error": error}
         item.title = "Run failed"
         item.body = error
