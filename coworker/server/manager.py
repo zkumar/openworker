@@ -5052,10 +5052,9 @@ class SessionManager:
                 workspace=workspace,
                 model=self.model,
                 mode=self.mode.value,
-                # One origin line keeps the session from showing the starter empty-state; the
-                # RunPanel below is the surface for the record, the process and the gate.
-                messages=[{"role": "user",
-                           "content": f"Work item received from channel: {item.channel}"}],
+                # No chat transcript at all: a channel run IS a panel, not a conversation.
+                # The UI suppresses its starter when a run is present.
+                messages=[],
                 title=f"{item.channel}: {decided}",
                 agent="code",
                 origin=item.channel,
@@ -5106,9 +5105,10 @@ class SessionManager:
                 workspace=workspace,
                 model=self.model,
                 mode=self.mode.value,
-                messages=[{"role": "user",
-                           "content": f"Work item received from channel: {item.channel}"}],
-                title=f"{item.channel} · {self._record_ref(item.record)} · running".replace(" ·  · ", " · "),
+                # A channel run is a panel, not a chat: no synthetic transcript messages.
+                messages=[],
+                title=(f"{item.channel} · {self._record_ref(item.record)}".replace(" ·  · ", " · ")
+                       if self._record_ref(item.record) else item.channel),
                 agent="code",
                 origin=item.channel,
                 origin_label=f"{item.channel} work item",
@@ -5172,9 +5172,8 @@ class SessionManager:
         self.inbox._save()          # noqa: SLF001
         record = self.session_store.load(session_id)
         if record is not None:
-            record.title = (f"{item.data.get('channel', 'channel')}"
-                            + (f" · {self._record_ref(item.data.get('record'))}" if self._record_ref(item.data.get("record")) else "")
-                            + f" · {decided}")
+            # The session title is written once by the store; the outcome lives on the item
+            # (its title) and in the panel, so nothing here claims a stale status.
             self.session_store.save(record)
 
     def resume_interrupted_runs(self) -> None:

@@ -1588,7 +1588,9 @@ export function App() {
 
   // `running` too: a mid-turn reconnect may land before any item is rebuilt — a live
   // session must show the transcript (waiting row, Stop), never the intro hero.
-  const idle = items.length === 0 && !streaming && !running;
+  // A channel run is a panel, not an empty conversation: never show the starter over it.
+  const hasRunPanel = Boolean((sessionInbox[0]?.data as RunData | undefined)?.record || signedItem);
+  const idle = items.length === 0 && !streaming && !running && !hasRunPanel;
   const pendingApproval = [...items].reverse().find((i) => i.kind === "approval" && !i.resolved);
   const pendingDirReq = [...items].reverse().find((i) => i.kind === "dirreq" && !i.resolved);
   const pendingToolReq = [...items].reverse().find((i) => i.kind === "toolreq" && !i.resolved);
