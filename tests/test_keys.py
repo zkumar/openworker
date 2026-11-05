@@ -45,7 +45,8 @@ def test_listing_never_returns_key_material(tmp_path):
     ks = _store(tmp_path)
     ks.mint("a", "x")
     row = ks.list()[0]
-    assert set(row) == {"id", "tenant", "label", "created_at", "revoked", "last_used_at"}
+    assert set(row) == {"id", "tenant", "label", "created_at", "revoked", "last_used_at",
+                        "role", "expires_at", "expired"}
 
 
 def test_rotation_keeps_both_keys_valid_until_the_old_one_is_revoked(tmp_path):
@@ -64,3 +65,35 @@ def test_an_existing_env_token_is_adopted_without_lockout(tmp_path):
     before = ks.count()
     ks.adopt("devtoken-loop")           # idempotent
     assert ks.count() == before
+
+
+def test_a_key_can_carry_a_role(tmp_path):
+    ks = _store(tmp_path)
+    admin_key, _ = ks.mint("t", "ops", role="admin")
+    agent_key, _ = ks.mint("t", "svc")
+    assert ks.authenticate(admin_key)["role"] == "admin"
+    assert ks.authenticate(agent_key)["role"] == "agent"
+
+
+def test_an_expired_key_stops_authenticating(tmp_path):
+    ks = _store(tmp_path)
+    key, _ = ks.mint("t", "short", ttl_days=-1)      # already past
+    assert ks.authenticate(key) is None, "an expired key must not authenticate"
+    live, _ = ks.mint("t", "live", ttl_days=7)
+    assert ks.authenticate(live)["tenant"] == "t"
+    assert [k["expired"] for k in ks.list() if k["tenant"] == "t"][-1] in (False, True)
+
+
+def test_an_adopted_env_token_is_admin(tmp_path):
+    ks = _store(tmp_path)
+    ks.adopt("legacy-token")
+    assert ks.authenticate("legacy-token")["role"] == "admin", \
+        "the operator credential must be able to manage keys"
+
+
+def test_listing_reports_expiry_state(tmp_path):
+    ks = _store(tmp_path)
+    ks.mint("t", "short", ttl_days=-1)
+    ks.mint("t", "fine", ttl_days=7)
+    flags = sorted(k["expired"] for k in ks.list())
+    assert flags == [False, True]

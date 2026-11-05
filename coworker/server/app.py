@@ -282,19 +282,25 @@ def create_app(manager: SessionManager) -> FastAPI:
             _boot,
         )
 
-    def _caller_tenant(request: Request) -> str | None:
-        """Who is calling, from either header. None = not authenticated."""
+    def _caller_identity(request: Request) -> dict[str, Any] | None:
+        """Who is calling (tenant + role), from either header. None = not authenticated."""
         bearer = request.headers.get("authorization", "")
         provided = request.headers.get("x-openworker-token", "")
         if not provided and bearer.lower().startswith("bearer "):
             provided = bearer.split(" ", 1)[1].strip()
-        return manager.keys.verify(provided) if provided else None
+        return manager.keys.authenticate(provided) if provided else None
+
+    def _require_admin(request: Request) -> None:
+        """Credential management is an operator action, not something a tenant agent may do."""
+        if getattr(request.state, "role", "") != "admin":
+            raise HTTPException(status_code=403, detail="admin role required")
 
     def _request_authenticated(request: Request) -> bool:
-        tenant = _caller_tenant(request)
-        if tenant is None:
+        found = _caller_identity(request)
+        if found is None:
             return False
-        request.state.tenant = tenant
+        request.state.tenant = found["tenant"]
+        request.state.role = found["role"]
         return True
 
     def _websocket_authenticated(ws: WebSocket) -> bool:
@@ -357,7 +363,7 @@ def create_app(manager: SessionManager) -> FastAPI:
         return {"personas": manager.personas.list_all(), "internal": include_unshipped()}
 
     @app.get("/v1/inbox")
-    def inbox(session_id: str = "", state: str = "") -> dict[str, Any]:
+    def inbox(session_id: str = "", state: str = "", request: Request = None) -> dict[str, Any]:
         from dataclasses import asdict
 
         # The cross-session Inbox list shows only Unattended (inbox-visibility) items; a per-session
@@ -370,6 +376,12 @@ def create_app(manager: SessionManager) -> FastAPI:
         # Enrich with the originating session's context so the Inbox is self-contained — the
         # "go to session" chip needs title/agent/workspace without depending on a (possibly stale)
         # client-side session list, and can link straight to it.
+        # Tenant isolation: an agent key sees only its own tenant's work; an admin sees all.
+        mine = getattr(getattr(request, "state", None), "tenant", "") or ""
+        role = getattr(getattr(request, "state", None), "role", "") or ""
+        if role != "admin" and mine:
+            items = [i for i in items if ((i.data or {}).get("tenant") or "default") == mine]
+
         out: list[dict[str, Any]] = []
         for i in items:
             d = asdict(i)
@@ -394,7 +406,15 @@ def create_app(manager: SessionManager) -> FastAPI:
         return {"items": out}
 
     @app.post("/v1/inbox/{item_id}/resolve")
-    async def resolve_inbox_item(item_id: str, body: dict) -> dict[str, Any]:
+    async def resolve_inbox_item(item_id: str, body: dict, request: Request) -> dict[str, Any]:
+        # A tenant may only act on its own work.
+        _item = manager.inbox.get(item_id)
+        if _item is not None:
+            _mine = getattr(request.state, "tenant", "") or ""
+            _role = getattr(request.state, "role", "") or ""
+            _theirs = (_item.data or {}).get("tenant") or "default"
+            if _role != "admin" and _mine and _mine != _theirs:
+                raise HTTPException(status_code=404, detail="unknown item")
         # Idempotent + first-responder-wins: ok=False means it was already resolved elsewhere.
         # Routes through resolve_inbox so a restart-orphaned prompt durably resumes its turn.
         resolution = str(body.get("resolution", "deny"))
@@ -454,20 +474,26 @@ def create_app(manager: SessionManager) -> FastAPI:
         return manager.build_receipt(item)
 
     @app.get("/v1/keys")
-    def list_keys() -> dict[str, Any]:
+    def list_keys(request: Request) -> dict[str, Any]:
         """Which keys exist (never the key material), so an operator can rotate safely."""
+        _require_admin(request)
         return {"keys": manager.keys.list()}
 
     @app.post("/v1/keys")
-    def mint_key(body: dict) -> dict[str, Any]:
+    def mint_key(body: dict, request: Request) -> dict[str, Any]:
+        _require_admin(request)
         tenant = str(body.get("tenant") or "default").strip() or "default"
         label = str(body.get("label") or "").strip()
-        key, key_id = manager.keys.mint(tenant, label)
+        role = str(body.get("role") or "agent").strip()
+        ttl = body.get("ttl_days")
+        key, key_id = manager.keys.mint(tenant, label, role=role,
+                                        ttl_days=int(ttl) if ttl else None)
         # Shown exactly once: it is stored hashed and cannot be recovered later.
-        return {"ok": True, "id": key_id, "tenant": tenant, "key": key}
+        return {"ok": True, "id": key_id, "tenant": tenant, "role": role, "key": key}
 
     @app.post("/v1/keys/{key_id}/revoke")
-    def revoke_key(key_id: str) -> dict[str, Any]:
+    def revoke_key(key_id: str, request: Request) -> dict[str, Any]:
+        _require_admin(request)
         if not manager.keys.revoke(key_id):
             raise HTTPException(status_code=404, detail="unknown or already revoked key")
         return {"ok": True}

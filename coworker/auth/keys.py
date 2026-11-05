@@ -37,9 +37,17 @@ class KeyStore:
                     key_hash     TEXT NOT NULL UNIQUE,
                     created_at   TEXT NOT NULL,
                     revoked_at   TEXT NOT NULL DEFAULT '',
-                    last_used_at TEXT NOT NULL DEFAULT ''
+                    last_used_at TEXT NOT NULL DEFAULT '',
+                    role         TEXT NOT NULL DEFAULT 'agent',
+                    expires_at   TEXT NOT NULL DEFAULT ''
                 )""")
             con.execute("CREATE INDEX IF NOT EXISTS idx_key_hash ON api_key(key_hash)")
+            # migration for databases created before roles/expiry existed
+            cols = {r[1] for r in con.execute("PRAGMA table_info(api_key)")}
+            if "role" not in cols:
+                con.execute("ALTER TABLE api_key ADD COLUMN role TEXT NOT NULL DEFAULT 'agent'")
+            if "expires_at" not in cols:
+                con.execute("ALTER TABLE api_key ADD COLUMN expires_at TEXT NOT NULL DEFAULT ''")
 
     def _con(self) -> sqlite3.Connection:
         con = sqlite3.connect(self.path, timeout=15, check_same_thread=False)
@@ -47,30 +55,42 @@ class KeyStore:
         return con
 
     # -- lifecycle -------------------------------------------------------------
-    def mint(self, tenant: str = DEFAULT_TENANT, label: str = "") -> tuple[str, str]:
+    def mint(self, tenant: str = DEFAULT_TENANT, label: str = "",
+             role: str = "agent", ttl_days: int | None = None) -> tuple[str, str]:
         """Create a key. Returns (plaintext, id) — the plaintext is never recoverable again."""
         key = "ow_" + secrets.token_hex(20)
         key_id = uuid.uuid4().hex
         with self._con() as con:
+            expires = ""
+            if ttl_days:
+                expires = time.strftime("%Y-%m-%dT%H:%M:%S",
+                                        time.localtime(time.time() + ttl_days * 86400))
             con.execute(
-                "INSERT INTO api_key (id, tenant, label, key_hash, created_at) VALUES (?,?,?,?,?)",
+                "INSERT INTO api_key (id, tenant, label, key_hash, created_at, role, expires_at)"
+                " VALUES (?,?,?,?,?,?,?)",
                 (key_id, tenant or DEFAULT_TENANT, label, _hash(key),
-                 time.strftime("%Y-%m-%dT%H:%M:%S")),
+                 time.strftime("%Y-%m-%dT%H:%M:%S"), role if role in ("admin", "agent") else "agent",
+                 expires),
             )
         return key, key_id
 
-    def adopt(self, key: str, tenant: str = DEFAULT_TENANT, label: str = "legacy env token") -> Optional[str]:
+    def adopt(self, key: str, tenant: str = DEFAULT_TENANT,
+              label: str = "legacy env token", role: str = "admin") -> Optional[str]:
         """Import an existing (env) token so an upgrade does not lock anyone out."""
         if not key:
             return None
         with self._con() as con:
             row = con.execute("SELECT id FROM api_key WHERE key_hash=?", (_hash(key),)).fetchone()
             if row:
+                # A key imported from the environment is the machine's operator credential, so it
+                # must carry the admin role even if it was created before roles existed.
+                con.execute("UPDATE api_key SET role=? WHERE id=?", (role, row[0]))
                 return row[0]
             key_id = uuid.uuid4().hex
             con.execute(
-                "INSERT INTO api_key (id, tenant, label, key_hash, created_at) VALUES (?,?,?,?,?)",
-                (key_id, tenant, label, _hash(key), time.strftime("%Y-%m-%dT%H:%M:%S")),
+                "INSERT INTO api_key (id, tenant, label, key_hash, created_at, role)"
+                " VALUES (?,?,?,?,?,?)",
+                (key_id, tenant, label, _hash(key), time.strftime("%Y-%m-%dT%H:%M:%S"), role),
             )
         return key_id
 
@@ -82,25 +102,36 @@ class KeyStore:
 
     def list(self) -> list[dict[str, Any]]:
         """Never returns a key or its hash — only what an operator needs to decide."""
+        now = time.strftime("%Y-%m-%dT%H:%M:%S")
         with self._con() as con:
             rows = con.execute(
-                "SELECT id, tenant, label, created_at, revoked_at, last_used_at FROM api_key"
-                " ORDER BY created_at DESC").fetchall()
+                "SELECT id, tenant, label, created_at, revoked_at, last_used_at, role, expires_at"
+                " FROM api_key ORDER BY created_at DESC").fetchall()
         return [{"id": r[0], "tenant": r[1], "label": r[2], "created_at": r[3],
-                 "revoked": bool(r[4]), "last_used_at": r[5]} for r in rows]
+                 "revoked": bool(r[4]), "last_used_at": r[5], "role": r[6],
+                 "expires_at": r[7] or None,
+                 "expired": bool(r[7]) and r[7] <= now} for r in rows]
 
-    def verify(self, key: str) -> Optional[str]:
-        """The tenant a key belongs to, or None. Revoked keys never authenticate."""
+    def authenticate(self, key: str) -> Optional[dict[str, Any]]:
+        """(tenant, role) for a live key. Revoked and expired keys never authenticate."""
         if not key:
             return None
+        now = time.strftime("%Y-%m-%dT%H:%M:%S")
         with self._con() as con:
-            row = con.execute("SELECT id, tenant FROM api_key WHERE key_hash=? AND revoked_at=''",
-                              (_hash(key),)).fetchone()
+            row = con.execute(
+                "SELECT id, tenant, role, expires_at FROM api_key"
+                " WHERE key_hash=? AND revoked_at=''", (_hash(key),)).fetchone()
             if row is None:
                 return None
-            con.execute("UPDATE api_key SET last_used_at=? WHERE id=?",
-                        (time.strftime("%Y-%m-%dT%H:%M:%S"), row[0]))
-        return row[1]
+            if row[3] and row[3] <= now:          # expired
+                return None
+            con.execute("UPDATE api_key SET last_used_at=? WHERE id=?", (now, row[0]))
+        return {"tenant": row[1], "role": row[2] or "agent"}
+
+    def verify(self, key: str) -> Optional[str]:
+        """The tenant a key belongs to, or None."""
+        found = self.authenticate(key)
+        return found["tenant"] if found else None
 
     def count(self) -> int:
         with self._con() as con:
