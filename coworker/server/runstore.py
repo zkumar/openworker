@@ -109,6 +109,11 @@ class RunStore:
                 return None
             return generation + 1
 
+    def stats(self) -> dict[str, int]:
+        with self._lock, self._con() as con:
+            return dict(con.execute(
+                "SELECT state, count(*) FROM run_effect GROUP BY state").fetchall())
+
     def get(self, run_key: str) -> Optional[dict[str, Any]]:
         with self._lock, self._con() as con:
             r = con.execute("SELECT run_key, session_id, fabric_run, agent, record, state,"

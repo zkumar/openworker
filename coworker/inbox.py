@@ -111,6 +111,7 @@ class InboxStore:
         )
         self._lock = threading.Lock()
         self._items: dict[str, InboxItem] = {}
+        self._deleted: set[str] = set()
         self._waiters: dict[str, asyncio.Event] = {}
         self._load()
 
@@ -170,40 +171,58 @@ class InboxStore:
                 self._save()
 
     def _save(self) -> None:
-        """Commit every item in one transaction.
+        """Commit changed items in one transaction.
 
-        SQLite gives what the JSON rewrite could not: an all-or-nothing commit (a crash cannot
-        leave a truncated inbox) and file mode 0600 by default. Two processes can still race on
-        the same row — WAL keeps the database consistent, but true multi-writer correctness needs
-        row-level updates, which is a separate step.
+        Two properties matter when more than one process shares this database:
+
+        - **No blanket delete.** The previous version removed every row absent from this
+          process's cache, so a process holding a stale cache would silently erase work another
+          process had just added.
+        - **Only changed rows are written.** Unchanged rows are skipped, which keeps the write
+          set (and the lock window) proportional to what actually moved.
+
+        Concurrent writers on DIFFERENT rows are therefore safe. Two processes editing the SAME
+        item are last-write-wins — a conflict policy is a separate problem, not a corruption one.
         """
         if not self.db_path:
             return
-        rows = [
-            (i.id, i.session_id, i.kind, i.state, i.created_at, json.dumps(asdict(i)))
-            for i in self._items.values()
-        ]
-        keep = tuple(self._items.keys())
         with self._con() as con:
-            con.executemany(
-                """INSERT INTO inbox_item (id, session_id, kind, state, created_at, payload)
-                   VALUES (?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(id) DO UPDATE SET
-                     session_id = excluded.session_id, kind = excluded.kind,
-                     state = excluded.state, created_at = excluded.created_at,
-                     payload = excluded.payload""",
-                rows,
-            )
-            if keep:
-                con.execute(
-                    f"DELETE FROM inbox_item WHERE id NOT IN ({','.join('?' * len(keep))})", keep
+            existing = {
+                row[0]: row[1]
+                for row in con.execute("SELECT id, payload FROM inbox_item").fetchall()
+            }
+            rows = []
+            for item in self._items.values():
+                payload = json.dumps(asdict(item))
+                if existing.get(item.id) == payload:
+                    continue                       # unchanged since the last commit
+                rows.append((item.id, item.session_id, item.kind, item.state,
+                             item.created_at, payload))
+            if rows:
+                con.executemany(
+                    """INSERT INTO inbox_item (id, session_id, kind, state, created_at, payload)
+                       VALUES (?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(id) DO UPDATE SET
+                         session_id = excluded.session_id, kind = excluded.kind,
+                         state = excluded.state, created_at = excluded.created_at,
+                         payload = excluded.payload""",
+                    rows,
                 )
-            else:
-                con.execute("DELETE FROM inbox_item")
+            for item_id in self._deleted:
+                con.execute("DELETE FROM inbox_item WHERE id=?", (item_id,))
+            self._deleted.clear()
         try:
             os.chmod(self.db_path, 0o600)
         except OSError:
             pass
+
+    def remove(self, item_id: str) -> bool:
+        """Delete an item explicitly. Removal is always explicit — never inferred."""
+        existed = self._items.pop(item_id, None) is not None
+        if existed:
+            self._deleted.add(item_id)
+            self._save()
+        return existed
 
     # -- adding -----------------------------------------------------------------
     def add(

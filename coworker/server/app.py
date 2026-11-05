@@ -473,6 +473,13 @@ def create_app(manager: SessionManager) -> FastAPI:
         # (e.g. a signature that arrives while the last step is still being appended).
         return manager.build_receipt(item)
 
+    @app.get("/v1/metrics")
+    def metrics() -> dict[str, Any]:
+        """Operational snapshot: queue depth, run states, decision mix, active alerts."""
+        from coworker.observability import snapshot
+
+        return snapshot(manager)
+
     @app.get("/v1/keys")
     def list_keys(request: Request) -> dict[str, Any]:
         """Which keys exist (never the key material), so an operator can rotate safely."""
