@@ -5,6 +5,7 @@ import type { Attachment } from "../types";
 import { ConnectorIcon } from "../connectors/ConnectorIcon";
 import { indexConnectors, visualFor, type ConnectorMap } from "../connectors/visuals";
 import { useRoots } from "../useRoots";
+import { fabricRole, getFabricAgents, getFabricPersonas, matchesScope, type FabricAgent } from "../fabric";
 import { AddFolderForm } from "./AddFolderForm";
 
 // Empty-state for a fresh Cowork session (§27): a greeting, exactly three concrete template
@@ -35,6 +36,8 @@ export function SessionIntro({
   const [live, setLive] = useState<Set<string>>(new Set());
   const [byName, setByName] = useState<ConnectorMap>({});
   const [addingFolder, setAddingFolder] = useState(false);
+  // The role's governed worklist: the domain kit's agents, scoped by the chosen persona.
+  const [fabricTasks, setFabricTasks] = useState<{ key: string; label: string; sample: string }[]>([]);
 
   useEffect(() => {
     // Live = what this session can touch right now (connected AND not muted here) — the same
@@ -46,6 +49,40 @@ export function SessionIntro({
       .then((list) => setByName(indexConnectors(list)))
       .catch(() => {});
   }, [sessionId]);
+
+  const loadFabricTasks = () => {
+    const role = fabricRole();
+    Promise.all([
+      getFabricAgents().catch(() => ({ agents: [] as FabricAgent[] })),
+      getFabricPersonas().catch(() => ({ personas: [] as { id: string; scope: string[] }[] })),
+    ])
+      .then(([agentsRes, personasRes]) => {
+        const selected = personasRes.personas.find((p) => p.id === role);
+        const agents = selected
+          ? agentsRes.agents.filter((a) => matchesScope(a.agent_id, selected.scope))
+          : agentsRes.agents;
+        const tasks: { key: string; label: string; sample: string }[] = [];
+        for (const a of agents) {
+          for (const s of (a.sample_inputs || []).slice(0, 2)) {
+            const sample = String(Object.values(s)[0] ?? "");
+            if (sample) tasks.push({ key: `${a.agent_id}:${sample}`, label: a.label, sample });
+          }
+        }
+        setFabricTasks(tasks.slice(0, 6));
+      })
+      .catch(() => {});
+  };
+  useEffect(() => {
+    loadFabricTasks();
+    const onSignedIn = () => loadFabricTasks();
+    window.addEventListener("fabric:signed-in", onSignedIn);
+    window.addEventListener("fabric:role", onSignedIn);
+    return () => {
+      window.removeEventListener("fabric:signed-in", onSignedIn);
+      window.removeEventListener("fabric:role", onSignedIn);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const shared = roots.filter((r) => !r.primary);
   const hubspotReady = live.has("hubspot");
@@ -71,6 +108,21 @@ export function SessionIntro({
       <p className="intro-lede">{t("intro.lede")}</p>
 
       <div className="intro-tasks">
+        {fabricTasks.length > 0 && fabricTasks.map((task) => (
+          <button
+            key={task.key}
+            className="task-card"
+            data-testid="intro-task-fabric"
+            onClick={() => onPrefill(`Run ${task.sample}`)}
+          >
+            <span className="task-card-body">
+              <span className="task-card-title">{task.label}</span>
+              <span className="task-card-sub">{task.sample}</span>
+            </span>
+            <span className="task-card-act">{t("intro.cta_start")}</span>
+          </button>
+        ))}
+        {fabricTasks.length === 0 && (<>
         <button className="task-card" data-testid="intro-task-folder" onClick={pickFolder}>
           <span className="task-card-body">
             <span className="task-card-title">{t("intro.task_folder_title")}</span>
@@ -128,6 +180,7 @@ export function SessionIntro({
             {ghSlackReady ? t("intro.cta_start") : t("intro.cta_configure")}
           </span>
         </button>
+        </>)}
       </div>
     </div>
   );

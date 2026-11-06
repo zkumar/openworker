@@ -1,0 +1,94 @@
+"""A3b wiring — a channel POST becomes a governed run and a lesson."""
+
+import urllib.request
+
+import pytest
+from fastapi.testclient import TestClient
+
+from coworker.server.app import create_app
+from coworker.server.manager import SessionManager
+
+
+def _fabric_up() -> bool:
+    try:
+        urllib.request.urlopen("http://127.0.0.1:8766/api/config", timeout=2)
+        return True
+    except Exception:
+        return False
+
+
+@pytest.fixture()
+def client(tmp_path, monkeypatch):
+    # Auth is real now: the app authenticates every call, so the test carries a key.
+    monkeypatch.setenv("COWORKER_API_TOKEN", "test-token")
+    c = TestClient(create_app(SessionManager(data_dir=tmp_path / "data")))
+    c.headers.update({"X-OpenWorker-Token": "test-token"})
+    return c
+
+
+def test_unknown_channel_is_not_found(client):
+    assert client.post("/v1/channels/nope", json={"record": {"a": 1}}).status_code == 404
+
+
+def test_empty_payload_carries_no_work(client):
+    body = client.post("/v1/channels/webhook", json={}).json()
+    assert body["ok"] is False
+
+
+def _wait_for_run(client, session_id, timeout=25.0):
+    """The dispatch is asynchronous: poll the item until the run reports it finished."""
+    import time
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        items = client.get(f"/v1/inbox?session_id={session_id}").json()["items"]
+        if items and not (items[0].get("data") or {}).get("running"):
+            return items[0]
+        time.sleep(0.2)
+    raise AssertionError("run did not finish in time")
+
+
+@pytest.mark.skipif(not _fabric_up(), reason="no fabric at :8766")
+def test_approving_the_inbox_item_signs_the_governed_run(client):
+    body = client.post("/v1/channels/webhook", json={"record": {
+        "request_id": "PA-2026-001",
+        "member_id": "MEM001", "procedure_code": "27447", "provider_npi": "1234567890",
+        "request_date": "2026-01-15", "requested_service_date": "2026-02-15",
+        "requested_units": 1,
+        "clinical_notes": "45yo male, severe right knee OA, conservative care failed.",
+    }}).json()
+    assert body["running"] is True, "the route must return before the run executes"
+    session_id = body["session_id"]
+    approval = _wait_for_run(client, session_id)
+    assert approval["kind"] == "approval"
+    resolved = client.post(f"/v1/inbox/{approval['id']}/resolve",
+                           json={"resolution": "approve"}).json()
+    assert resolved["ok"] is True
+    assert resolved.get("sign_error") is None
+    assert resolved["signed"]["final_state"] in ("denied", "pended", "approved"), \
+        "the signature completes the run"
+
+
+@pytest.mark.skipif(not _fabric_up(), reason="no fabric at :8766")
+def test_webhook_record_is_dispatched_and_sealed(client):
+    response = client.post("/v1/channels/webhook", json={"record": {
+        "member_id": "MEM001", "procedure_code": "27447", "provider_npi": "1234567890",
+        "request_date": "2026-01-15", "requested_service_date": "2026-02-15",
+        "requested_units": 1,
+        "clinical_notes": "45yo male, severe right knee OA, conservative care failed.",
+    }})
+    body = response.json()
+    assert body["ok"] is True and body["channel"] == "webhook"
+    item = _wait_for_run(client, body["session_id"])
+    data = item["data"]
+    assert data["agent"] == "payor.demo.prior_auth"
+    assert data["awaiting_signoff"] is True, "a gated agent must pause, not self-sign"
+    assert len(data["steps"]) >= 4, "each sealed step is recorded for the timeline"
+
+    # the loop is SURFACED, not just returned: a real session and a parked approval
+    session_id = body["session_id"]
+    sessions = client.get("/v1/sessions").json()["sessions"]
+    assert any(s["session_id"] == session_id for s in sessions), "no session for the work item"
+    inbox = client.get(f"/v1/inbox?session_id={session_id}").json()["items"]
+    assert inbox, "a gated agent must park an approval"
+    assert inbox[0]["kind"] == "approval"
+    assert "payor.demo.prior_auth" in inbox[0]["title"]

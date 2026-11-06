@@ -21,7 +21,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -188,7 +188,53 @@ from ..teams.model import BoardNotFoundError as TeamsBoardNotFoundError
 from .manager import SessionManager, _approval_body
 
 
+def _start_and_dispatch(manager, name: str, payload: dict, event_id: str | None = None,
+                       tenant: str = "") -> dict:
+    """Create the run and drive it in the background. Shared by HTTP ingress and the consumer."""
+    import threading
+
+    from coworker.channels import ingest as channel_ingest_item
+    from coworker.dispatch import CapabilityRouter
+    from coworker.dispatch.router import FabricRefusal
+
+    item = channel_ingest_item(name, payload or {})
+    if item is None:
+        if event_id:
+            manager.ingress.mark_failed(event_id, "payload carried no work item")
+        return {"ok": False, "detail": "payload carried no work item"}
+
+    session_id, inbox_id = manager.channel_run_start(item)
+    if tenant:
+        manager.stamp_tenant(inbox_id, tenant)
+    if event_id:
+        # Claim it NOW. Leaving it pending while the run is in flight lets the consumer pick the
+        # same event up and start a second run for one record.
+        manager.ingress.mark_dispatched(event_id, session_id)
+
+    def run() -> None:
+        try:
+            result = CapabilityRouter().route(
+                item.record,
+                on_step=lambda step: manager.channel_append_step(inbox_id, step),
+                on_start=lambda run_id, agent: manager.channel_set_run(inbox_id, run_id, agent))
+            manager.channel_run_finish(inbox_id, result, session_id)
+        except FabricRefusal as exc:                 # actionable: show the fabric's own words
+            manager.channel_run_fail(inbox_id, exc.detail, retryable=exc.retryable,
+                                     not_found=(exc.status == 404))
+        except Exception as exc:
+            manager.channel_run_fail(inbox_id, str(exc))
+            if event_id:                             # transient: a restart retries the record
+                manager.ingress.mark_failed(event_id, str(exc))
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"ok": True, "channel": item.channel, "running": True,
+            "session_id": session_id, "inbox_id": inbox_id, "event_id": event_id}
+
+
 def create_app(manager: SessionManager) -> FastAPI:
+    from coworker.channels import install_defaults
+
+    install_defaults()
     from ..providers.openrouter_auth import OpenRouterAuth
 
     def openrouter_changed() -> None:
@@ -233,6 +279,35 @@ def create_app(manager: SessionManager) -> FastAPI:
         await manager.aclose()  # stop gateway + close MCP connections on shutdown
 
     app = FastAPI(title="coworker", version="0.0.0", lifespan=lifespan)
+
+    # Durable restart: runs left mid-flight by a crash are re-driven, not lost.
+    # Started directly rather than via on_event, which FastAPI deprecates / no longer fires.
+    def _sweep_interrupted() -> None:
+        import time
+        time.sleep(1.0)                     # let the port bind and settings load first
+        while True:
+            try:
+                manager.resume_interrupted_runs()   # restart recovery AND retry after backoff
+                manager.deliver_pending_receipts()  # undelivered JSON receipts
+                # Records accepted before a crash and never started: dispatch them now.
+                for ev in manager.ingress.due():
+                    try:
+                        _start_and_dispatch(manager, ev["channel"], ev["payload"], ev["id"])
+                    except KeyError:
+                        manager.ingress.mark_failed(ev["id"], f"unknown channel {ev['channel']!r}")
+                    except Exception as exc:
+                        manager.ingress.mark_failed(ev["id"], str(exc))
+                # Offline arrivals: JSON files dropped while the harness was down.
+                for channel, payload, path in manager.spool.poll():
+                    try:
+                        out = _start_and_dispatch(manager, channel, payload)
+                        manager.spool.done(path) if out.get("ok") else manager.spool.reject(path)
+                    except Exception:
+                        manager.spool.fail(path)
+            except Exception:
+                pass
+            time.sleep(5.0)
+    __import__("threading").Thread(target=_sweep_interrupted, daemon=True).start()
     api_token = os.environ.get("COWORKER_API_TOKEN", "")
     tokenless_paths = {
         "/v1/health",
@@ -245,23 +320,47 @@ def create_app(manager: SessionManager) -> FastAPI:
         "/v1/remote/device/poll",
     }
 
-    def _request_authenticated(request: Request) -> bool:
-        provided = request.headers.get("x-openworker-token", "")
-        return bool(
-            api_token
-            and provided
-            and secrets.compare_digest(provided, api_token)
+    # The env token is imported as a real key so an existing deployment keeps working; it can
+    # then be rotated away (mint, switch callers, revoke) instead of requiring a coordinated stop.
+    if api_token:
+        manager.keys.adopt(api_token, tenant=os.environ.get("COWORKER_TENANT", "default"))
+    if not manager.keys.count():
+        _boot, _boot_id = manager.keys.mint("default", "bootstrap — replace me")
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "no API keys found; minted a bootstrap key (store it now, it is not shown again): %s",
+            _boot,
         )
 
+    def _caller_identity(request: Request) -> dict[str, Any] | None:
+        """Who is calling (tenant + role), from either header. None = not authenticated."""
+        bearer = request.headers.get("authorization", "")
+        provided = request.headers.get("x-openworker-token", "")
+        if not provided and bearer.lower().startswith("bearer "):
+            provided = bearer.split(" ", 1)[1].strip()
+        return manager.keys.authenticate(provided) if provided else None
+
+    def _require_admin(request: Request) -> None:
+        """Credential management is an operator action, not something a tenant agent may do."""
+        if getattr(request.state, "role", "") != "admin":
+            raise HTTPException(status_code=403, detail="admin role required")
+
+    def _request_authenticated(request: Request) -> bool:
+        found = _caller_identity(request)
+        if found is None:
+            return False
+        request.state.tenant = found["tenant"]
+        request.state.role = found["role"]
+        return True
+
     def _websocket_authenticated(ws: WebSocket) -> bool:
-        if not api_token:
-            return True
         protocols = {
             part.strip()
             for part in ws.headers.get("sec-websocket-protocol", "").split(",")
             if part.strip()
         }
-        return any(secrets.compare_digest(part, api_token) for part in protocols)
+        return any(manager.keys.verify(part) is not None for part in protocols)
 
     @app.middleware("http")
     async def require_sidecar_token(request: Request, call_next):
@@ -272,8 +371,7 @@ def create_app(manager: SessionManager) -> FastAPI:
         # Preflights carry the requested header name, not its value. CORS checks the
         # Origin; the actual state-changing request still must authenticate.
         if (
-            not api_token
-            or request.method == "OPTIONS"
+            request.method == "OPTIONS"
             or request.url.path in tokenless_paths
             # `/v1/board` carries its own, stronger auth: per-actor board tokens
             # (identity + access), designed to be handed to external harnesses and
@@ -337,7 +435,7 @@ def create_app(manager: SessionManager) -> FastAPI:
         return {"personas": manager.personas_index(), "internal": include_unshipped()}
 
     @app.get("/v1/inbox")
-    def inbox(session_id: str = "", state: str = "") -> dict[str, Any]:
+    def inbox(session_id: str = "", state: str = "", request: Request = None) -> dict[str, Any]:
         from dataclasses import asdict
         manager.reconcile_obsolete_prompts(session_id)
 
@@ -351,6 +449,12 @@ def create_app(manager: SessionManager) -> FastAPI:
         # Enrich with the originating session's context so the Inbox is self-contained — the
         # "go to session" chip needs title/agent/workspace without depending on a (possibly stale)
         # client-side session list, and can link straight to it.
+        # Tenant isolation: an agent key sees only its own tenant's work; an admin sees all.
+        mine = getattr(getattr(request, "state", None), "tenant", "") or ""
+        role = getattr(getattr(request, "state", None), "role", "") or ""
+        if role != "admin" and mine:
+            items = [i for i in items if ((i.data or {}).get("tenant") or "default") == mine]
+
         out: list[dict[str, Any]] = []
         for i in items:
             d = asdict(i)
@@ -376,16 +480,34 @@ def create_app(manager: SessionManager) -> FastAPI:
 
     @app.post("/v1/inbox/{item_id}/resolve")
     async def resolve_inbox_item(item_id: str, body: dict, request: Request) -> dict[str, Any]:
+        # A tenant may only act on its own work.
+        _item = manager.inbox.get(item_id)
+        if _item is not None:
+            _mine = getattr(request.state, "tenant", "") or ""
+            _role = getattr(request.state, "role", "") or ""
+            _theirs = (_item.data or {}).get("tenant") or "default"
+            if _role != "admin" and _mine and _mine != _theirs:
+                raise HTTPException(status_code=404, detail="unknown item")
         # Idempotent + first-responder-wins: ok=False means it was already resolved elsewhere.
-        # Routes through resolve_inbox so a restart-orphaned prompt durably resumes its turn.
-        # The deciding person: the controller-verified login on a proxied call (the only
-        # way that header exists on a joined box), else unknown.
+        # The deciding person: the controller-verified login on a proxied call, else unknown.
+        resolution = str(body.get("resolution", "deny"))
         ok = await manager.resolve_inbox(
-            item_id,
-            str(body.get("resolution", "deny")),
-            by=request.headers.get("x-openworker-actor", ""),
+            item_id, resolution, by=request.headers.get("x-openworker-actor", "")
         )
-        return {"ok": ok}
+        approver = str(body.get("approver") or "").strip()
+        signed = None
+        if ok and resolution not in ("deny", "reject"):
+            # approving a channel gate is a SIGNATURE: the fabric seals it and the run finishes
+            session_id = manager.session_of_inbox_item(item_id)
+            if session_id:
+                try:
+                    signed = manager.sign_channel_item(session_id)
+                    manager.record_signature(item_id, approver or "a human approver",
+                                             (signed or {}).get("signed") or {})
+                    manager.record_steps(item_id, (signed or {}).get("steps") or [])
+                except Exception as exc:      # relay the fabric's refusal, never swallow it
+                    return {"ok": ok, "signed": None, "sign_error": str(exc)}
+        return {"ok": ok, "signed": signed}
 
     @app.get("/v1/subscriptions")
     def subscriptions() -> dict[str, Any]:
@@ -411,6 +533,83 @@ def create_app(manager: SessionManager) -> FastAPI:
                 }
             )
         return {"subscriptions": out}
+
+    @app.get("/v1/inbox/{item_id}/receipt")
+    def inbox_receipt(item_id: str, request: Request) -> dict[str, Any]:
+        """The machine-readable result of a run — the outbound JSON contract."""
+        item = manager.inbox.get(item_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="unknown item")
+        mine = getattr(request.state, "tenant", "")
+        theirs = (item.data or {}).get("tenant")
+        if mine and theirs and mine != theirs:
+            raise HTTPException(status_code=404, detail="unknown item")   # don't leak existence
+        # Always derived from the item's CURRENT state: a stored snapshot can lag the run
+        # (e.g. a signature that arrives while the last step is still being appended).
+        return manager.build_receipt(item)
+
+    @app.get("/v1/metrics")
+    def metrics() -> dict[str, Any]:
+        """Operational snapshot: queue depth, run states, decision mix, active alerts."""
+        from coworker.observability import snapshot
+
+        return snapshot(manager)
+
+    @app.get("/v1/keys")
+    def list_keys(request: Request) -> dict[str, Any]:
+        """Which keys exist (never the key material), so an operator can rotate safely."""
+        _require_admin(request)
+        return {"keys": manager.keys.list()}
+
+    @app.post("/v1/keys")
+    def mint_key(body: dict, request: Request) -> dict[str, Any]:
+        _require_admin(request)
+        tenant = str(body.get("tenant") or "default").strip() or "default"
+        label = str(body.get("label") or "").strip()
+        role = str(body.get("role") or "agent").strip()
+        ttl = body.get("ttl_days")
+        key, key_id = manager.keys.mint(tenant, label, role=role,
+                                        ttl_days=int(ttl) if ttl else None)
+        # Shown exactly once: it is stored hashed and cannot be recovered later.
+        return {"ok": True, "id": key_id, "tenant": tenant, "role": role, "key": key}
+
+    @app.post("/v1/keys/{key_id}/revoke")
+    def revoke_key(key_id: str, request: Request) -> dict[str, Any]:
+        _require_admin(request)
+        if not manager.keys.revoke(key_id):
+            raise HTTPException(status_code=404, detail="unknown or already revoked key")
+        return {"ok": True}
+
+    @app.post("/v1/receipts/verify")
+    def verify_receipt_body(receipt: dict[str, Any]) -> dict[str, Any]:
+        """Verify a receipt someone received — detects any edit made after emission."""
+        from coworker.receipts import verify_receipt
+
+        return verify_receipt(receipt)
+
+    @app.post("/v1/channels/{name}")
+    def channel_ingest(name: str, body: dict, request: Request) -> dict[str, Any]:
+        """A work item arrives from a channel and is dispatched straight away.
+
+        The channel turns the payload into a work item; the capability router frames it, picks
+        an agent from its declared card, executes the governed run and records the lesson.
+        This is the harness end of the loop — no domain is named anywhere here.
+        """
+        import threading
+
+        from coworker.channels import ingest as channel_ingest_item
+        from coworker.dispatch import CapabilityRouter
+        from coworker.dispatch.router import FabricRefusal
+
+        # Persist BEFORE doing anything: once we answer 200 the work is durable even if the
+        # process dies before the run starts (the consumer re-dispatches it on restart).
+        event_id = manager.ingress.enqueue(name, body or {})
+        try:
+            return _start_and_dispatch(manager, name, body or {}, event_id,
+                                       tenant=getattr(request.state, "tenant", "") or "")
+        except KeyError:
+            manager.ingress.mark_failed(event_id, f"unknown channel {name!r}")
+            raise HTTPException(status_code=404, detail=f"unknown channel {name!r}")
 
     @app.get("/v1/channels/recent")
     def recent_channels() -> dict[str, Any]:

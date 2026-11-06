@@ -379,8 +379,8 @@
       "context": "上下文优化",
       "skills": "技能",
       "memory": "记忆",
-      "customization": "自定义"
-    },
+      "organization": "组织",
+      "customization": "自定义"    },
     "general_title": "通用",
     "general_sub": "OpenWorker 在本机的外观与行为。",
     "theme": "主题",
@@ -483,11 +483,12 @@
     "voice_action_failed": "语音输入无法完成该操作。",
     "personas_desc": "同事是专精于特定角色或任务的 agent，自带胜任该角色所需的工具与技能。启用同事后，即可在开始会话时选择它。",
     "composer_section": "输入框",
-    "context_bar_title": "在模型标签上显示上下文占用环",
-    "context_bar_desc": "一个小圆环，显示模型上下文窗口的占用程度。无论开关，标签的悬停提示都会给出具体数字。",
+    "context_bar_title": "显示上下文窗口占用条",
+    "context_bar_desc": "一个小指示条，显示模型上下文窗口的占用程度。关闭后将改为以数字形式显示。",
+    "organization_intro": "登录到你的组织。",
+    "organization_desc": "查看你获授权的角色以及已安装的领域工具包。",
     "hide_reasoning_title": "工作时隐藏思考过程",
-    "hide_reasoning_desc": "任务运行期间，将快速滚动的思考文本折叠成一行安静的“思考中…”提示。完整思考内容仍会在任务结束后显示。"
-  },
+    "hide_reasoning_desc": "任务运行期间，将快速滚动的思考文本折叠成一行安静的“思考中…”提示。完整思考内容仍会在任务结束后显示。"  },
   "cloud": {
     "check_browser": "请查看你的浏览器…",
     "sign_in": "登录 OpenWorker Cloud",

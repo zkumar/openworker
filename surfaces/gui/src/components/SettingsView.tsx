@@ -80,6 +80,7 @@ import { MemorySection } from "./MemorySection";
 import { SandboxSection } from "./SandboxSection";
 import { CustomizationTab } from "./CustomizationTab";
 import { PersonasTab } from "./PersonasTab";
+import { FabricEntry } from "./FabricEntry";
 import { SkillsTab } from "./SkillsTab";
 import { showPersonas } from "../flags";
 
@@ -106,7 +107,8 @@ export type SetTab =
   | "personas"
   // UX-049: per-connector glance pages (App group), shown once connected somewhere.
   | "slack"
-  | "github";
+  | "github"
+  | "organization";
 
 const CARD = "rounded-xl2 border border-line bg-panel";
 const FIELD_LABEL = "text-ui font-medium text-ink";
@@ -143,6 +145,7 @@ const SET_GROUPS: { name: string; nameKey?: string; scope: "app" | "machine" | "
     scope: "app",
     tabs: [
       { key: "appearance", label: "General", labelKey: "settings.tab.general", icon: "sliders" },
+      { key: "organization", label: "Organization", labelKey: "settings.tab.organization", icon: "sliders" },
       { key: "voice", label: "Voice input", labelKey: "settings.tab.voice", icon: "mic" },
       { key: "account", label: "Account", labelKey: "settingsx.tab.account", icon: "user" },
       { key: "slack", label: "Slack", labelKey: "settingsx.tab.slack", icon: "plug" },
@@ -452,6 +455,8 @@ export function SettingsView({
                 />
               )}
             </section>
+          ) : tab === "organization" ? (
+            <OrganizationSection />
           ) : (
             <PersonasSection
               key={scopeId || "local"}
@@ -702,6 +707,20 @@ function VoiceInputSection() {
 // The Gallery entry point is GONE (owner 2026-08-21) — coworkers install from
 // GitHub / folder / zip only. GalleryModal stays in the tree for the gallery's
 // possible return as a first-class distribution surface, but nothing mounts it.
+function OrganizationSection() {
+  const { t } = useTranslation();
+  return (
+    <section>
+      <PanelHead title={t("settings.tab.organization")} sub={t("settings.organization_intro")} />
+      <p className="text-[13px] text-muted leading-relaxed max-w-[560px] mt-5 mb-4">
+        {t("settings.organization_desc")}
+      </p>
+      <FabricEntry />
+    </section>
+  );
+}
+
+
 function PersonasSection({
   onOpenPersona,
   machine,

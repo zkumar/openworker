@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "./App";
+import { Root } from "./Root";
 import { initCloudAuth, shouldGate } from "./cloudAuth";
 import { initTheme } from "./theme";
 import { initTextSize } from "./textSize";
@@ -27,7 +28,7 @@ const root = ReactDOM.createRoot(document.getElementById("root")!);
 const render = () =>
   root.render(
     <React.StrictMode>
-      <App />
+      <Root />
     </React.StrictMode>,
   );
 

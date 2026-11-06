@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { useTranslation } from "react-i18next";
 import {
   announceInboxUnlock,
@@ -70,6 +70,8 @@ import {
 import { fullPersonaName, isProjectScoped } from "./personaScope";
 import { baseName } from "./paths";
 import { itemsFromMessages } from "./itemsFromMessages";
+import { fabricUser } from "./fabric";
+import { RunPanel, type RunData } from "./components/RunPanel";
 import { addTurnUsage, emptyUsage, teamUsage, usageFromMessages } from "./usage";
 import { streamMode } from "./streamGate";
 import { InboxItemCard, approvalItemFromParked } from "./components/InboxItemCard";
@@ -425,7 +427,8 @@ export function App() {
   // topbar toggle persists per-device. Deep links (artifact/board chips, Access)
   // still force-show transiently — they never overwrite the stored preference.
   const [railHidden, setRailHidden] = useState<boolean>(() => {
-    try { return localStorage.getItem(RAIL_HIDDEN_KEY) !== "0"; } catch { return true; }
+    // Visible by default: the plan/artifacts rail is part of the workflow, not an opt-in.
+    try { return localStorage.getItem(RAIL_HIDDEN_KEY) === "1"; } catch { return false; }
   });
   const setRailHiddenPersist = useCallback((v: boolean) => {
     setRailHidden(v);
@@ -541,6 +544,10 @@ export function App() {
   // unattended session's blocking question/approval can be answered in context (resolving the
   // same item the Inbox shows; first responder wins).
   const [sessionInbox, setSessionInbox] = useState<InboxItem[]>([]);
+  // The card must not vanish on approval: keep a resolved marker naming the signer and time.
+  const [signedItem, setSignedItem] = useState<InboxItem | null>(null);
+  // A refused signature must be said out loud, not swallowed.
+  const [signError, setSignError] = useState<string | null>(null);
   const finishedGateCalls = useRef(new Map<string, Set<string>>());
   const gateScope = `${machine || "local"}:${sessionId}`;
   const pendingInbox = useCallback((inbox: InboxItem[]) => inbox.filter(it =>
@@ -570,16 +577,55 @@ export function App() {
     // First Unattended enable = Inbox machinery engaged → the account row's chip unlocks (§26).
     if (on) announceInboxUnlock();
   };
+
+  // Pending items drive the live card; the newest signed item drives the resolved card.
+  const refreshSigned = useCallback(() => {
+    getInbox(sessionId)
+      .then((items) => {
+        // A run is any item carrying a record — signed, rejected or failed alike. Keying on the
+        // signature alone made a rejected run look like an empty session.
+        const runs = items.filter((i) => ((i.data ?? {}) as RunData).record);
+        const pendingRun = runs.find((i) => i.state === "pending") ?? null;
+        setSessionInbox(pendingRun ? [pendingRun] : []);
+        const latest = runs
+          .filter((i) => i.state !== "pending")
+          .sort((a, b) => String(b.resolved_at ?? "").localeCompare(String(a.resolved_at ?? "")))[0];
+        setSignedItem(latest ?? null);
+      })
+      .catch(() => setSessionInbox([]));
+  }, [sessionId]);
+
+  // While a run is executing, poll so each sealed step appears as it lands.
+  useEffect(() => {
+    const items = [sessionInbox[0], signedItem].filter(Boolean) as InboxItem[];
+    const running = items.some((i) => (i.data as RunData | undefined)?.running);
+    if (!running) return;
+    const t = setInterval(refreshSigned, 700);
+    return () => clearInterval(t);
+  }, [sessionInbox, signedItem, refreshSigned]);
+
+  // The rail's Progress shows THIS run's steps — the middle the user could not see before.
+  const runRailSteps = useMemo(() => {
+    const data = ((signedItem ?? sessionInbox[0])?.data ?? {}) as RunData;
+    return (data.steps ?? []).map((s) => ({
+      content: `${s.state_before ?? "?"} → ${s.state_after ?? "?"} · ${s.summary ?? s.type ?? ""}`,
+      status: "done" as const,
+    }));
+  }, [signedItem, sessionInbox]);
+
+  const resolveSessionInbox = async (id: string, resolution: string) => {
+    const who = fabricUser() || "a human approver";
+    const outcome = await resolveInboxItem(id, resolution, who);
+    setSignError(outcome?.sign_error ?? null);
+    refreshSigned(); // the resolved gate persists its signature on the item — reload it
+    refreshSessions(); // attention badge should drop right away
+  };
+
   // The Mode menu's "Answer for me while I'm away" toggle: attendance "auto".
   const toggleAutoAnswer = async (on: boolean) => {
     const value: Attendance = on ? "auto" : "attended";
     await setAttendance(sessionId, value);
     markAttendance(value);
-  };
-  const resolveSessionInbox = async (id: string, resolution: string) => {
-    await resolveInboxItem(id, resolution);
-    getInbox(sessionId, "pending").then(inbox => setSessionInbox(pendingInbox(inbox))).catch(() => {});
-    refreshSessions(); // attention badge should drop right away
   };
   // MUST pick a folder before starting — requires_folder personas (git-bound Code, the
   // security coworkers). Everything else starts orphan: the server auto-provisions a
@@ -1348,6 +1394,7 @@ export function App() {
     let canceled = false;
     let request = 0;
     const load = () => {
+      refreshSigned();
       const current = ++request;
       getInbox(sessionId).then(inbox => {
         if (canceled || current !== request) return;
@@ -1641,7 +1688,10 @@ export function App() {
   };
 
   const openSessionFromInbox = (sid: string, ws: string, ag: string) => selectSession(sid, ws, ag);
+  // F-011: a session the human picked outranks the persona's resume target.
+  const explicitSelection = useRef(false);
   const selectSession = async (id: string, ws: string, ag: string) => {
+    explicitSelection.current = true; // set before any await; cleared when a persona is chosen
     setSurface("session"); // selecting a conversation always returns to the conversation view
     setTodo([]);
     setStreaming("");
@@ -1735,7 +1785,10 @@ export function App() {
       if (!gatesWorkspace(name)) setShowGate(false);
       else if (targetWorkspace) setShowGate(false);
       else setShowGate(true);
-      setSessionId(target.sessionId);
+      // F-011: do not replace a session the user just picked with the persona's
+      // resume target. The flag is consumed here.
+      if (!explicitSelection.current) setSessionId(target.sessionId);
+      explicitSelection.current = false;
       try {
         const messages = await getSessionMessages(target.sessionId);
         setItems(itemsFromMessages(messages));
@@ -1848,9 +1901,10 @@ export function App() {
 
   // `running` too: a mid-turn reconnect may land before any item is rebuilt — a live
   // session must show the transcript (waiting row, Stop), never the intro hero.
-  // Not idle while this session's sandbox is being built: the waiting row lives in the
-  // transcript branch, and a brand-new session has no items yet (OPE-206).
-  const idle = items.length === 0 && !streaming && !running && !preparingSandbox;
+  // A channel run is a panel, not an empty conversation: never show the starter over it.
+  const hasRunPanel = Boolean((sessionInbox[0]?.data as RunData | undefined)?.record || signedItem);
+  // Not idle while this session's sandbox is being built (OPE-206), and never over a run panel.
+  const idle = items.length === 0 && !streaming && !running && !preparingSandbox && !hasRunPanel;
   const pendingApproval = [...items].reverse().find((i) => i.kind === "approval" && !i.resolved);
   const pendingDirReq = [...items].reverse().find((i) => i.kind === "dirreq" && !i.resolved);
   const pendingToolReq = [...items].reverse().find((i) => i.kind === "toolreq" && !i.resolved);
@@ -2255,6 +2309,19 @@ export function App() {
         )}
         <div className={"main-workspace" + (railHidden ? " rail-hidden" : "")}>
           <div className="main-chat">
+            {/* The run leads the view: record, process, live steps and gate sit above the chat. */}
+            {sessionInbox[0] && ((sessionInbox[0].data ?? {}) as RunData).record ? (
+              <RunPanel
+                data={{
+                  ...(sessionInbox[0].data as RunData),
+                  error: signError ?? (sessionInbox[0].data as RunData)?.error,
+                }}
+                pending
+                onDecide={(d) => void resolveSessionInbox(sessionInbox[0].id, d)}
+              />
+            ) : signedItem ? (
+              <RunPanel data={signedItem.data as RunData} pending={false} onDecide={() => {}} />
+            ) : null}
             {/* Automation-run context (owner ask 2026-07-04): a __run__ session looked like any
                 other chat with no way back to the runs list. Lives INSIDE the chat column (which
                 is padded to clear the absolute glass topbar — rendering above .main-workspace put
@@ -2573,6 +2640,8 @@ export function App() {
                   // live path. A lead's decision on a worker's call, and everything else,
                   // keeps the Inbox card (it answers the worker's item on an override).
                   (() => {
+                    const run = sessionInbox[0].data as RunData | undefined;
+                    if (run?.record) return null;   // rendered at the top of the chat column
                     const d = sessionInbox[0].data;
                     const parked =
                       d?.tool === "decide_worker_call" ? null : approvalItemFromParked(sessionInbox[0]);
@@ -2609,7 +2678,7 @@ export function App() {
             sessionId={sessionId}
             refreshKey={browserRefreshKey}
             toolNames={items.filter((i) => i.kind === "tool").map((i: any) => i.name)}
-            todo={todo}
+            todo={runRailSteps.length ? runRailSteps : todo}
             running={running}
             onPreviewChange={onArtifactPreview}
             // Universal scratch (UX-036): every session has a scratch surface, so the

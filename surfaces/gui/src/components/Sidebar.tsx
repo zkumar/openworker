@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { getI18n, useTranslation } from "react-i18next";
+import { fabricUser } from "../fabric";
 import {
   announceCloudChanged,
   AUTOMATIONS_CHANGED,
@@ -190,6 +191,14 @@ const compactAge = (iso?: string | null): string => {
 
 export function Sidebar(props: Props) {
   const { t } = useTranslation();
+  // The fabric person is the identity this product is really signed in as; the cloud account is
+  // a separate (optional) thing, so never show "not signed in" while a fabric person is present.
+  const [fabricName, setFabricName] = useState<string | null>(() => fabricUser());
+  useEffect(() => {
+    const refresh = () => setFabricName(fabricUser());
+    window.addEventListener("fabric:identity", refresh);
+    return () => window.removeEventListener("fabric:identity", refresh);
+  }, []);
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [appMenuOpen, setAppMenuOpen] = useState(false);
   // The account row (§26): cloud sign-in status drives the avatar/name/dot; refreshed on
@@ -577,6 +586,7 @@ export function Sidebar(props: Props) {
             : "hover:bg-panel") +
           (s.machine_offline ? " opacity-45" : "")
         }
+        data-testid={`session-row-${s.session_id}`}
         onClick={() => {
           if (!editing) props.onSelectSession(s.session_id, s.workspace, s.agent);
         }}
@@ -658,6 +668,7 @@ export function Sidebar(props: Props) {
           (s.machine_offline ? " opacity-45" : "")
         }
         title={editing ? undefined : s.machine_offline ? t("onmachine.sidebar.row_offline", { title, machine: s.machine_name || t("onmachine.machine_fallback") }) : title}
+        data-testid={`session-row-${s.session_id}`}
         onClick={() => {
           if (!editing) props.onSelectSession(s.session_id, s.workspace, s.agent);
         }}
@@ -1356,11 +1367,14 @@ export function Sidebar(props: Props) {
               }
               aria-hidden
             >
-              {accountSignedIn ? accountName.slice(0, 1).toUpperCase() : "?"}
+              {accountSignedIn
+                ? accountName.slice(0, 1).toUpperCase()
+                : fabricName
+                  ? fabricName.slice(0, 1).toUpperCase()
+                  : "?"}
             </span>
             <span className={"truncate " + (accountSignedIn ? "" : "text-muted")}>
-              {accountSignedIn ? accountName : t("sidebar.not_signed_in_row")}
-            </span>
+              {accountSignedIn ? accountName : (fabricName ?? t("sidebar.not_signed_in_row"))}            </span>
             {accountSignedIn && (
               <span
                 className="w-[7px] h-[7px] rounded-full bg-ok shrink-0"

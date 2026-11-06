@@ -20,6 +20,10 @@ suspends the agent until that item is resolved.
 
 from __future__ import annotations
 
+import sqlite3
+
+import os
+
 import asyncio
 import json
 import threading
@@ -110,28 +114,127 @@ class InboxItem:
 class InboxStore:
     def __init__(self, path: Optional[str | Path] = None) -> None:
         self.path = Path(path) if path else None
+        # Work items live in SQLite (WAL, transactional) next to the old JSON file. The JSON
+        # rewrite-per-step could be corrupted by a crash mid-write and had no cross-process
+        # safety at all; SQLite gives atomic commits and a single-writer lock.
+        self.db_path = (
+            self.path.with_name("inbox.sqlite") if self.path else None
+        )
         self._lock = threading.Lock()
         self._items: dict[str, InboxItem] = {}
+        self._deleted: set[str] = set()
         self._waiters: dict[str, asyncio.Event] = {}
         self._waiter_loops: dict[str, asyncio.AbstractEventLoop] = {}
         self._load()
 
     # -- persistence ------------------------------------------------------------
+    def _con(self) -> "sqlite3.Connection":
+        con = sqlite3.connect(str(self.db_path), timeout=15, check_same_thread=False)
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("PRAGMA synchronous=FULL")
+        return con
+
+    def _init_db(self) -> None:
+        with self._con() as con:
+            con.execute("""
+                CREATE TABLE IF NOT EXISTS inbox_item (
+                    id          TEXT PRIMARY KEY,
+                    session_id  TEXT NOT NULL,
+                    kind        TEXT NOT NULL,
+                    state       TEXT NOT NULL,
+                    created_at  TEXT NOT NULL,
+                    payload     TEXT NOT NULL
+                )""")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_item_session ON inbox_item(session_id)")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_item_state ON inbox_item(state)")
+
     def _load(self) -> None:
+        if not self.db_path:
+            return
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_db()
+        with self._con() as con:
+            rows = con.execute("SELECT payload FROM inbox_item").fetchall()
+        for (payload,) in rows:
+            try:
+                item = InboxItem(**json.loads(payload))
+            except Exception:
+                continue
+            self._items[item.id] = item
+        if self._items:
+            return                      # once SQLite holds items, it is authoritative
+        # First run on this machine: import a legacy JSON inbox once, then leave it as a backup.
         if self.path and self.path.is_file():
-            data = json.loads(self.path.read_text(encoding="utf-8"))
+            try:
+                if (self.path.stat().st_mode & 0o077):     # tighten a pre-existing loose file
+                    os.chmod(self.path, 0o600)
+            except OSError:
+                pass
+            try:
+                data = json.loads(self.path.read_text(encoding="utf-8"))
+            except Exception:
+                data = {}
             for raw in data.get("items", []):
-                item = InboxItem(**raw)
-                self._items[item.id] = item
+                try:
+                    self._items[InboxItem(**raw).id] = InboxItem(**raw)
+                except Exception:
+                    continue
+            if self._items:
+                self._save()
 
     def _save(self) -> None:
-        if not self.path:
+        """Commit changed items in one transaction.
+
+        Two properties matter when more than one process shares this database:
+
+        - **No blanket delete.** The previous version removed every row absent from this
+          process's cache, so a process holding a stale cache would silently erase work another
+          process had just added.
+        - **Only changed rows are written.** Unchanged rows are skipped, which keeps the write
+          set (and the lock window) proportional to what actually moved.
+
+        Concurrent writers on DIFFERENT rows are therefore safe. Two processes editing the SAME
+        item are last-write-wins — a conflict policy is a separate problem, not a corruption one.
+        """
+        if not self.db_path:
             return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
-            json.dumps({"items": [asdict(i) for i in self._items.values()]}, indent=2),
-            encoding="utf-8",
-        )
+        with self._con() as con:
+            existing = {
+                row[0]: row[1]
+                for row in con.execute("SELECT id, payload FROM inbox_item").fetchall()
+            }
+            rows = []
+            for item in self._items.values():
+                payload = json.dumps(asdict(item))
+                if existing.get(item.id) == payload:
+                    continue                       # unchanged since the last commit
+                rows.append((item.id, item.session_id, item.kind, item.state,
+                             item.created_at, payload))
+            if rows:
+                con.executemany(
+                    """INSERT INTO inbox_item (id, session_id, kind, state, created_at, payload)
+                       VALUES (?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(id) DO UPDATE SET
+                         session_id = excluded.session_id, kind = excluded.kind,
+                         state = excluded.state, created_at = excluded.created_at,
+                         payload = excluded.payload""",
+                    rows,
+                )
+            for item_id in self._deleted:
+                con.execute("DELETE FROM inbox_item WHERE id=?", (item_id,))
+            self._deleted.clear()
+        try:
+            os.chmod(self.db_path, 0o600)
+        except OSError:
+            pass
+
+    def remove(self, item_id: str) -> bool:
+        """Delete an item explicitly. Removal is always explicit — never inferred."""
+        existed = self._items.pop(item_id, None) is not None
+        if existed:
+            self._deleted.add(item_id)
+            self._save()
+        return existed
 
     # -- adding -----------------------------------------------------------------
     def add(

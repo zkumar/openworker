@@ -390,8 +390,8 @@
       "context": "Context optimization",
       "skills": "Skills",
       "memory": "Memory",
-      "customization": "Customization"
-    },
+      "organization": "Organization",
+      "customization": "Customization"    },
     "general_title": "General",
     "general_sub": "How OpenWorker looks and behaves on this machine.",
     "theme": "Theme",
@@ -495,11 +495,12 @@
     "voice_action_failed": "Voice Input could not complete that action.",
     "personas_desc": "Coworkers are agents specialized for a particular role or task. They come equipped with the tools and skills to be successful in that role. Enabling a coworker lets you pick it when starting a conversation.",
     "composer_section": "Composer",
-    "context_bar_title": "Show the context ring on the model pill",
-    "context_bar_desc": "A small ring showing how full the model’s context window is. The pill’s tooltip states the figures either way.",
+    "context_bar_title": "Show the context window bar",
+    "context_bar_desc": "A small meter showing how full the model’s context window is. Turn it off to show the same thing as a number instead.",
+    "organization_intro": "Sign in to your organization.",
+    "organization_desc": "See the personas you are entitled to and the domain kits installed.",
     "hide_reasoning_title": "Hide thinking while I work",
-    "hide_reasoning_desc": "Collapse the fast-scrolling reasoning trace to a quiet “Thinking…” line while a turn runs. The full reasoning still appears after the turn finishes."
-  },
+    "hide_reasoning_desc": "Collapse the fast-scrolling reasoning trace to a quiet “Thinking…” line while a turn runs. The full reasoning still appears after the turn finishes."  },
   "cloud": {
     "check_browser": "Check your browser…",
     "sign_in": "Sign in to OpenWorker Cloud",

@@ -13,6 +13,7 @@ import threading
 import json
 import logging
 import os
+import tempfile
 import re
 import shlex
 import shutil
@@ -376,6 +377,17 @@ class SessionManager:
             base = state_dir()
         base.mkdir(parents=True, exist_ok=True)
 
+        self._active_runs: set[str] = set()
+        from coworker.auth.keys import KeyStore
+        from coworker.ingress import IngressQueue
+        from coworker.server.runstore import RunStore
+        self.runs = RunStore(base / "runs.sqlite")
+        # Durable ingress: a record that was accepted is never lost to a restart.
+        self.ingress = IngressQueue(base / "ingress.sqlite")
+        # Per-tenant API keys (hashed, revocable) replace one shared static token.
+        self.keys = KeyStore(str(base / "keys.sqlite"))
+        from coworker.channels.spool import FileSpool
+        self.spool = FileSpool(base / "spool")   # inbox ids this process owns right now
         self.memory_store: MemoryStore = SQLiteMemoryStore(base / "coworker.db")
         # MEMORY-SPEC §4.3/§6: the on/off switch + the user's standing rules. Settings-
         # level, outside the memory table; read at engine build time.
@@ -7900,6 +7912,367 @@ class SessionManager:
             "task": task.public(),
             "runs": [r.to_dict() for r in self.task_store.runs(task_id)],
         }
+
+    def record_channel_item(self, item: Any, result: dict[str, Any]) -> str:
+        """Surface a dispatched channel work item as a real session (+ an approval when gated).
+
+        The session carries the item, the chosen agent and the sealed outcome, so the loop the
+        dispatcher ran is visible in the UI instead of only in an HTTP response. A gated agent
+        also parks an approval in the Inbox — the human sign-off the card advertises.
+        """
+        session_id = f"ch_{uuid.uuid4().hex[:12]}"
+        # a session must have a real workspace or the UI refuses to open it
+        store_path = getattr(self.memory_store, "path", ":memory:")
+        base = Path(store_path).parent if store_path != ":memory:" else Path(tempfile.gettempdir())
+        workspace = self.default_workspace or str(base / "channel-workspaces" / session_id)
+        Path(workspace).mkdir(parents=True, exist_ok=True)
+        record = item.record
+        decided = result.get("decision")
+        agent = result.get("agent")
+        self.session_store.save(
+            SessionRecord(
+                session_id=session_id,
+                workspace=workspace,
+                model=self.model,
+                mode=self.mode.value,
+                # No chat transcript at all: a channel run IS a panel, not a conversation.
+                # The UI suppresses its starter when a run is present.
+                messages=[],
+                title=f"{item.channel}: {decided}",
+                agent="code",
+                origin=item.channel,
+                origin_label=f"{item.channel} work item",
+            )
+        )
+        if result.get("human_gate_required"):
+            self.inbox.add_approval(
+                session_id,
+                f"Sign off: {agent} → {decided}",
+                body=(f"{result.get('envelopes')} sealed steps. "
+                      f"Signature: {result.get('plan', {}).get('signoff') or 'human sign-off'}."),
+                data={"agent": agent, "decision": decided, "session_id": session_id,
+                      "fabric_run": result.get("session_id"),
+                      "awaiting_signoff": result.get("awaiting_signoff"),
+                      "channel": item.channel,
+                      "record": record,
+                      "envelopes": result.get("envelopes"),
+                      "steps": result.get("steps"),
+                      "capabilities": result.get("capabilities"),
+                      "plan": result.get("plan")},
+            )
+        return session_id
+
+    def session_of_inbox_item(self, item_id: str) -> str | None:
+        for item in self.inbox.list():
+            if item.id == item_id:
+                return item.session_id
+        return None
+
+    # The reference the CALLER used for the request itself — never a subject id. Returning
+    # member_id here named receipts after the patient and made two requests for one member
+    # overwrite each other.
+    _REF_KEYS = ("request_id", "slr_id", "capa_id", "case_id", "ticket_id", "record_id", "ref")
+    _SUBJECT_KEYS = frozenset({"member_id", "patient_id", "provider_id", "provider_npi",
+                               "user_id", "owner_id", "author_id", "approver_id"})
+
+    @classmethod
+    def _record_ref(cls, record: dict[str, Any] | None) -> str:
+        rec = record or {}
+        for k in cls._REF_KEYS:
+            v = rec.get(k)
+            if isinstance(v, str) and v:
+                return v
+        for k, v in rec.items():
+            if k.endswith("_id") and k not in cls._SUBJECT_KEYS and isinstance(v, str) and v:
+                return v
+        return ""
+
+    def stamp_tenant(self, item_id: str, tenant: str) -> None:
+        """Record WHICH tenant sent this work, so reads can be scoped to it."""
+        item = self.inbox.get(item_id)
+        if item is None:
+            return
+        item.data = {**(item.data or {}), "tenant": tenant}
+        self.inbox._save()          # noqa: SLF001
+
+    def channel_run_start(self, item: Any) -> tuple[str, str]:
+        """Open a run BEFORE it executes, so the UI can watch it. Returns (session_id, inbox_id)."""
+        session_id = f"ch_{uuid.uuid4().hex[:12]}"
+        store_path = getattr(self.memory_store, "path", ":memory:")
+        base = Path(store_path).parent if store_path != ":memory:" else Path(tempfile.gettempdir())
+        workspace = self.default_workspace or str(base / "channel-workspaces" / session_id)
+        Path(workspace).mkdir(parents=True, exist_ok=True)
+        self.session_store.save(
+            SessionRecord(
+                session_id=session_id,
+                workspace=workspace,
+                model=self.model,
+                mode=self.mode.value,
+                # A channel run is a panel, not a chat: no synthetic transcript messages.
+                messages=[],
+                title=(f"{item.channel} · {self._record_ref(item.record)}".replace(" ·  · ", " · ")
+                       if self._record_ref(item.record) else item.channel),
+                agent="code",
+                origin=item.channel,
+                origin_label=f"{item.channel} work item",
+            )
+        )
+        record = self.inbox.add_approval(
+            session_id,
+            f"Running {item.channel} work item",
+            body="The governed run is executing…",
+            data={"channel": item.channel, "record": item.record, "running": True, "steps": []},
+        )
+        self.runs.begin(record.id, session_id, item.record)
+        self._active_runs.add(record.id)     # owned by this process — the sweeper must skip it
+        return session_id, record.id
+
+    def channel_set_run(self, item_id: str, fabric_run: str, agent: str) -> None:
+        """Persist the fabric run id immediately — this is what makes a restart resumable."""
+        item = self.inbox.get(item_id)
+        if item is None:
+            return
+        self.runs.set_fabric_run(item_id, fabric_run, agent)
+        item.data = {**(item.data or {}), "fabric_run": fabric_run, "agent": agent}
+        self.inbox._save()          # noqa: SLF001
+
+    def channel_append_step(self, item_id: str, step: dict[str, Any]) -> None:
+        """A step landed in the fabric's chain — show it now, not at the end."""
+        item = self.inbox.get(item_id)
+        if item is None:
+            return
+        data = dict(item.data or {})
+        steps = list(data.get("steps") or [])
+        steps.append(step)
+        item.data = {**data, "steps": steps, "envelopes": len(steps)}
+        self.inbox._save()          # noqa: SLF001 — same package, single writer
+        self.runs.touch(item_id)    # heartbeat: a healthy long run is not reclaimed
+
+    def channel_run_finish(self, item_id: str, result: dict[str, Any], session_id: str) -> None:
+        """Close the run: publish the decision, the plan and the gate (or seal it if ungated)."""
+        item = self.inbox.get(item_id)
+        if item is None:
+            return
+        data = dict(item.data or {})
+        steps = result.get("steps") or data.get("steps") or []
+        gated = bool(result.get("gates") or result.get("awaiting_signoff"))
+        decided = result.get("decision")
+        item.data = {**data,
+                     "agent": result.get("agent"), "decision": decided,
+                     "fabric_run": result.get("session_id"),
+                     "awaiting_signoff": gated, "plan": result.get("plan"),
+                     "capabilities": result.get("capabilities"),
+                     "running": False, "steps": steps, "envelopes": len(steps)}
+        ref = self._record_ref(item.data.get("record"))
+        label = f"{item.data.get('channel', 'channel')}" + (f" · {ref}" if ref else "")
+        item.title = (f"Sign off: {result.get('agent')} → {decided} · {ref}" if gated
+                      else f"{label} · {decided}")
+        self._active_runs.discard(item_id)
+        self.runs.finish(item_id, "gate" if gated else "sealed")
+        item.body = (f"{len(steps)} steps sealed. "
+                     f"Signature: {(result.get('plan') or {}).get('signoff') or 'human sign-off'}."
+                     if gated else f"{len(steps)} steps sealed.")
+        self.inbox._save()          # noqa: SLF001
+        if (item.data or {}).get("signature"):
+            item.data = {**(item.data or {}), "awaiting_signoff": False}
+        self.deliver_receipt(item_id)       # outbound: the run's JSON receipt
+        record = self.session_store.load(session_id)
+        if record is not None:
+            # The session title is written once by the store; the outcome lives on the item
+            # (its title) and in the panel, so nothing here claims a stale status.
+            self.session_store.save(record)
+
+    def resume_interrupted_runs(self) -> None:
+        """Durable restart: re-drive every run the process died inside of.
+
+        A run that was mid-flight when the sidecar stopped is left with running=True. The fabric
+        kept its sealed prefix, so `pursue` resumes it rather than replaying the work.
+        """
+        import threading
+
+        from coworker.dispatch import CapabilityRouter
+
+        for job in self.runs.due():
+            it_id = job["run_key"]
+            if it_id in self._active_runs:
+                continue     # busy here, not interrupted
+            it = self.inbox.get(it_id)
+            if it is None:
+                continue
+            generation = self.runs.claim(it_id, job["generation"])
+            if generation is None:
+                continue     # another writer got there first
+            data = it.data or {}
+
+            def work(item=it, data=data, fabric_run=job["fabric_run"], agent=job["agent"],
+                     record=job["record"]):
+                record = record or data.get("record") or {}
+                try:
+                    router = CapabilityRouter()
+                    if fabric_run:
+                        result = router.resume(fabric_run, record, agent=agent,
+                                               on_step=lambda s: self.channel_append_step(item.id, s))
+                    else:
+                        result = router.route(record,
+                                              on_step=lambda s: self.channel_append_step(item.id, s))
+                    self.channel_run_finish(item.id, result, item.session_id)
+                except Exception as exc:
+                    detail = getattr(exc, "detail", None)
+                    retryable = getattr(exc, "retryable", True)
+                    self.channel_run_fail(item.id, detail or f"resume failed: {exc}",
+                                          retryable=retryable)
+
+            threading.Thread(target=work, daemon=True).start()
+
+    def build_receipt(self, item: Any) -> dict[str, Any]:
+        """The OUTBOUND payload: everything a consumer needs, in plain JSON."""
+        d = item.data or {}
+        steps = d.get("steps") or []
+        sig = d.get("signature") or None
+        receipt = {
+            "receipt_version": 1,
+            "work_item": {"channel": d.get("channel"),
+                          "ref": self._record_ref(d.get("record")),
+                          "received_at": item.created_at},
+            "agent": d.get("agent"),
+            "status": ("sealed" if sig else
+                       "rejected" if d.get("not_found") else
+                       "error" if d.get("error") else
+                       "awaiting_signature" if d.get("awaiting_signoff") else "unknown"),
+            "decision": d.get("decision"),
+            "error": d.get("error") or None,
+            "reason": ("request id not found in the pack's records" if d.get("not_found")
+                       else None),
+            "sealed": bool(sig),
+            "awaiting_signoff": bool(d.get("awaiting_signoff")) and not sig,
+            "signature": sig,
+            "steps": [{"n": i + 1,
+                       "from_state": s.get("state_before"),
+                       "to_state": s.get("state_after"),
+                       "summary": s.get("summary"),
+                       "sha256": s.get("sha256")} for i, s in enumerate(steps)],
+            "evidence": {"fabric_run": d.get("fabric_run"),
+                         "envelopes": len(steps),
+                         "chain_head": steps[-1].get("sha256") if steps else None},
+            "harness": {"session_id": item.session_id, "inbox_id": item.id},
+        }
+        from coworker.receipts import seal_receipt
+        return seal_receipt(receipt)
+
+    def deliver_receipt(self, item_id: str) -> list[str]:
+        """Emit the receipt through every egress; a failure is retried, never dropped."""
+        from coworker.channels import registry
+
+        item = self.inbox.get(item_id)
+        if item is None:
+            return []
+        receipt = self.build_receipt(item)
+        failed = registry.deliver(receipt)
+        item.data = {**(item.data or {}), "receipt": receipt,
+                     "receipt_pending": bool(failed), "receipt_failed": failed}
+        self.inbox._save()          # noqa: SLF001
+        return failed
+
+    def deliver_pending_receipts(self) -> None:
+        for it in self.inbox.list():
+            if (it.data or {}).get("receipt_pending"):
+                self.deliver_receipt(it.id)
+
+    def channel_run_fail(self, item_id: str, error: str, retryable: bool = True,
+                         not_found: bool = False) -> None:
+        item = self.inbox.get(item_id)
+        if item is None:
+            return
+        self._active_runs.discard(item_id)
+        if retryable:
+            state = self.runs.fail(item_id, error)   # backoff decides retry vs terminal
+        else:
+            self.runs.finish(item_id, "failed")      # a refusal cannot be fixed by repeating it
+            state = "failed"
+        item.data = {**(item.data or {}), "running": False,
+                     "error": None if not_found else error,
+                     "decision": "not_found" if not_found else (item.data or {}).get("decision"),
+                     "not_found": not_found,
+                     "retrying": state == "dispatched"}
+        # "not found" is a DECISION about the request, not an error about our system
+        final = state != "dispatched"
+        if not_found:
+            item.title = "Not found — rejected"
+        else:
+            item.title = "Run failed" if state == "dispatched" else f"Rejected: {error[:60]}"
+        item.body = error
+        self.inbox._save()          # noqa: SLF001 — persist before emitting
+        self.deliver_receipt(item_id)   # the channel gets a JSON answer either way
+        if final:
+            # close the item: a rejected run must not sit there asking for a signature
+            item.state = "resolved"
+            item.resolution = "rejected"
+        self.inbox._save()          # noqa: SLF001
+
+    def record_signature(self, item_id: str, approver: str, gate: dict[str, Any]) -> None:
+        """Persist the signature ON the inbox item, so the resolved card survives a reload.
+
+        The conversation store appends by delta against its own count, which silently dropped a
+        record-level append; the inbox store is a plain record and is the reliable home for this.
+        """
+        item = self.inbox.get(item_id)
+        if item is None:
+            return
+        from datetime import datetime as _now
+        item.data = {**(item.data or {}),
+                     "awaiting_signoff": False,      # it was waiting; now it is signed
+                     "signature": {"approver": approver,
+                                   "at": _now.now().strftime("%Y-%m-%d %H:%M"), **gate}}
+        self.inbox._save()          # noqa: SLF001 — same package, single writer
+        self.deliver_receipt(item_id)       # re-emit, now carrying the signature
+
+    def record_steps(self, item_id: str, steps: list[dict[str, Any]]) -> None:
+        """Keep the item's step timeline current after the signature appends its final step."""
+        if not steps:
+            return
+        item = self.inbox.get(item_id)
+        if item is None:
+            return
+        item.data = {**(item.data or {}), "steps": steps, "envelopes": len(steps)}
+        self.inbox._save()          # noqa: SLF001 — same package, single writer
+
+    def sign_channel_item(self, session_id: str) -> dict[str, Any]:
+        """Complete the human gate for a channel item: the fabric seals the signature and finishes.
+
+        The fabric is the signatory authority; the harness only relays the human's decision. The
+        signature takes no argument beyond the run — that is the fabric's enforcement (RFC 0041 F4).
+        """
+        # the resolve already closed the item, so do not filter on state — read the parked record
+        items = self.inbox.list(session_id=session_id)
+        approval = next((i for i in items
+                         if i.kind == "approval" and (i.data or {}).get("fabric_run")), None)
+        if approval is None:
+            raise ValueError(f"session {session_id!r} has no pending approval")
+        fabric_run = (approval.data or {}).get("fabric_run")
+        if not fabric_run:
+            raise ValueError(f"session {session_id!r} carries no fabric run to sign")
+        import httpx
+        fabric = os.environ.get("REGAGENTIC_FABRIC_URL", "http://127.0.0.1:8766")
+        with httpx.Client(timeout=120) as client:
+            token = client.post(f"{fabric}/api/auth/login",
+                                json={"username": "dr.md", "password": "test"}).json()["access_token"]
+            signed = client.post(f"{fabric}/api/runs/{fabric_run}/signoff",
+                                 headers={"Authorization": f"Bearer {token}"})
+            signed.raise_for_status()
+            out = signed.json()
+            try:                      # the signature appends the final sealed step
+                chain = client.get(f"{fabric}/api/runs/{fabric_run}/chain",
+                                   headers={"Authorization": f"Bearer {token}"})
+                out["steps"] = [
+                    {"type": e.get("type"), "summary": e.get("summary"),
+                     "state_before": e.get("state_before"), "state_after": e.get("state_after"),
+                     "sha256": e.get("sha256"), "at": e.get("timestamp")}
+                    for e in ((chain.json().get("envelopes")) or [])
+                ]
+                out["envelopes"] = len(out["steps"])
+            except Exception:
+                pass
+            return out
 
     def create_automation(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Create an automation directly from the GUI (the "New automation" / template flow).
