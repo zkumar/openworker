@@ -8127,13 +8127,14 @@ class SessionManager:
     def build_receipt(self, item: Any) -> dict[str, Any]:
         """The OUTBOUND payload: everything a consumer needs, in plain JSON."""
         d = item.data or {}
-        steps = d.get("steps") or []
-        sig = d.get("signature") or None
-        from coworker.receipts import receipt_body, seal_receipt
-        # F-012: one builder for what we digest and what we emit.
-        return seal_receipt(receipt_body(
+        from coworker.receipts import SIGNED_BODY_KEY, emitted_body, receipt_body, seal_receipt
+        # F-012: one builder for what we digest and what we emit — and once the item was signed,
+        # the signed fields come from the body frozen at signing, so the digest the fabric sealed
+        # still covers the emitted bytes after the signature appended the final step.
+        live = receipt_body(
             data=d, channel=d.get("channel"), ref=self._record_ref(d.get("record")),
-            received_at=item.created_at, session_id=item.session_id, inbox_id=item.id))
+            received_at=item.created_at, session_id=item.session_id, inbox_id=item.id)
+        return seal_receipt(emitted_body(live, d.get(SIGNED_BODY_KEY)))
 
     def deliver_receipt(self, item_id: str) -> list[str]:
         """Emit the receipt through every egress; a failure is retried, never dropped."""
@@ -8228,24 +8229,37 @@ class SessionManager:
         if not fabric_run:
             raise ValueError(f"session {session_id!r} carries no fabric run to sign")
         import httpx
+
+        # F-012: freeze the signed body NOW. The signature will append the run's final sealed
+        # step, so the bytes the human authorises must be snapshotted before anything mutates —
+        # persisted on the item so emission (even after a restart) stays byte-identical to what
+        # the digest covers.
+        from coworker.receipts import SIGNED_BODY_KEY, content_sha256, receipt_body, signing_body
+        frozen = signing_body(receipt_body(
+            data=approval.data or {}, channel=(approval.data or {}).get("channel"),
+            ref=self._record_ref((approval.data or {}).get("record")),
+            received_at=approval.created_at, session_id=approval.session_id,
+            inbox_id=approval.id))
+        approval.data = {**(approval.data or {}), SIGNED_BODY_KEY: frozen}
+        self.inbox._save()          # noqa: SLF001 — the freeze lands before the digest leaves
+        digest = content_sha256(frozen)
         fabric = os.environ.get("REGAGENTIC_FABRIC_URL", "http://127.0.0.1:8766")
         with httpx.Client(timeout=120) as client:
             token = client.post(f"{fabric}/api/auth/login",
                                 json={"username": "dr.md", "password": "test"}).json()["access_token"]
-            # F-012 t02: tell the fabric what the human is about to authorise, BEFORE they sign.
-            # A separate call on purpose — a signoff that could name what to sign is one an approval
-            # engine can turn into a standing rule (RFC 0041 F4). Best-effort: an older fabric that
-            # does not have the endpoint leaves the receipt at level 1 rather than failing the sign.
-            from coworker.receipts import digest_for_signing, receipt_body
-            digest = digest_for_signing(receipt_body(
-                data=approval.data or {}, channel=(approval.data or {}).get("channel"),
-                ref=self._record_ref((approval.data or {}).get("record")),
-                received_at=approval.created_at, session_id=approval.session_id,
-                inbox_id=approval.id))
+            # F-012 t02: tell the fabric what the human is about to authorise, BEFORE they sign
+            # (fabric receipt-digest v1.0.0 — CONTRACTS.md §11, RFC 0053). A separate call on
+            # purpose: the signoff endpoint keeps its zero body, since a signoff that could name
+            # what to sign becomes a standing rule. Best-effort: an older fabric leaves
+            # the receipt at level 1 rather than failing the sign; a 4xx is never retried.
             recorded = client.post(f"{fabric}/api/runs/{fabric_run}/receipt-digest",
                                    headers={"Authorization": f"Bearer {token}"},
                                    json={"receipt_digest": digest})
-            digest_sealed = recorded.status_code == 200
+            # Level is a fact worth keeping: 200 means the digest will be under the seal (level 2);
+            # anything else leaves this receipt local-only (level 1).
+            approval.data = {**(approval.data or {}),
+                             "receipt_digest_recorded": recorded.status_code == 200}
+            self.inbox._save()          # noqa: SLF001
             signed = client.post(f"{fabric}/api/runs/{fabric_run}/signoff",
                                  headers={"Authorization": f"Bearer {token}"})
             signed.raise_for_status()

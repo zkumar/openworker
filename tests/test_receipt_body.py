@@ -83,4 +83,5 @@ def test_the_exclusion_is_stated_in_the_receipt():
     from coworker.receipts import INTEGRITY_KEY, seal_receipt
 
     integrity = seal_receipt(_body())[INTEGRITY_KEY]
-    assert set(integrity["signed_body_excludes"]) == {"signature", "sealed", "status"}
+    assert set(integrity["signed_body_excludes"]) == {"signature", "sealed", "status",
+                                                      "awaiting_signoff"}
