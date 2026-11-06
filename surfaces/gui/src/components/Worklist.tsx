@@ -140,6 +140,7 @@ export function Worklist({ onOpen }: { onOpen: (item: InboxItem) => void }) {
               return (
                 <tr
                   key={item.id}
+                  data-testid={`worklist-row-${item.id}`}
                   className="cursor-pointer border-t border-line hover:bg-panel"
                   onClick={() => onOpen(item)}
                 >

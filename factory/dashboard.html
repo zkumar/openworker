@@ -1,0 +1,631 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Factory Board</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a66; --line: #e4e2dc;
+    --pass: #1f8a4c; --pass-bg: #e3f4ea; --changes: #b45f06; --changes-bg: #fdf0dd;
+    --human: #b4235a; --human-bg: #fbe6ee; --live: #2463eb; --live-bg: #e4ecfd;
+    --skip: #a3a29c; --skip-bg: #f0efeb; --code-bg: #f1f0ec;
+    --shadow: 0 1px 2px rgba(0,0,0,.06), 0 2px 8px rgba(0,0,0,.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141413; --panel: #1e1e1c; --ink: #ecebe6; --muted: #9c9b95; --line: #31312e;
+      --pass: #5fd394; --pass-bg: #18392a; --changes: #f2a64a; --changes-bg: #3d2b12;
+      --human: #f27aa6; --human-bg: #43182a; --live: #7ea6ff; --live-bg: #1b2a4d;
+      --skip: #6d6c67; --skip-bg: #262624; --code-bg: #262624;
+      --shadow: 0 1px 2px rgba(0,0,0,.4);
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; padding: 18px 20px 6px; }
+  h1 { font-size: 18px; margin: 0; letter-spacing: -.01em; }
+  #status { color: var(--muted); font-size: 12px; }
+  #banner { margin: 8px 20px 0; padding: 8px 12px; border-radius: 8px; background: var(--human-bg);
+    color: var(--human); display: none; font-size: 13px; }
+  .flow { color: var(--muted); font-size: 12px; padding: 0 20px 10px; }
+  .board { display: grid; grid-template-columns: repeat(8, minmax(180px, 1fr)); gap: 12px;
+    padding: 8px 20px 24px; overflow-x: auto; }
+  .col { min-width: 0; }
+  .col h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; margin: 0 0 2px; }
+  .col .sub { color: var(--muted); font-size: 11px; margin-bottom: 8px; min-height: 16px; }
+  .col.human h2 { color: var(--human); }
+  .count { color: var(--muted); font-weight: 400; margin-left: 4px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 11px;
+    margin-bottom: 10px; box-shadow: var(--shadow); cursor: pointer; transition: border-color .15s; }
+  .card:hover, .card:focus-visible { border-color: var(--muted); outline: none; }
+  .card.needs { border-color: var(--human); box-shadow: 0 0 0 1px var(--human) inset; }
+  .card .id { font: 600 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted);
+    display: flex; justify-content: space-between; gap: 6px; }
+  .card .title { font-weight: 600; margin: 3px 0 6px; overflow-wrap: anywhere; }
+  .badge { align-self: flex-start; white-space: nowrap; font: 600 10px ui-sans-serif, system-ui; text-transform: uppercase; letter-spacing: .05em;
+    padding: 1px 6px; border-radius: 99px; background: var(--skip-bg); color: var(--muted); }
+  .live-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--live);
+    margin-right: 4px; animation: pulse 1.4s ease-in-out infinite; vertical-align: 1px; }
+  @keyframes pulse { 50% { opacity: .25; } }
+  @media (prefers-reduced-motion: reduce) { .live-dot, .chip.pending.live, .tk.building { animation: none; } }
+  .label { font-size: 11px; color: var(--muted); margin: 6px 0 3px; }
+  .tickets { display: flex; flex-wrap: wrap; gap: 3px; }
+  .tk { min-width: 22px; height: 18px; padding: 0 4px; border-radius: 4px; font: 600 10px/18px ui-monospace, monospace;
+    text-align: center; background: var(--skip-bg); color: var(--muted); }
+  .tk.done { background: var(--pass-bg); color: var(--pass); }
+  .tk.building { background: var(--live-bg); color: var(--live); animation: pulse 1.4s ease-in-out infinite; }
+  .tk.blocked { background: var(--human-bg); color: var(--human); }
+  .round { display: flex; align-items: center; gap: 3px; margin-top: 3px; flex-wrap: wrap; }
+  .round .r { font: 600 10px ui-monospace, monospace; color: var(--muted); width: 20px; }
+  .chip { font: 600 10px/16px ui-sans-serif, system-ui; padding: 0 5px; border-radius: 4px;
+    background: var(--skip-bg); color: var(--muted); }
+  .chip.PASS { background: var(--pass-bg); color: var(--pass); }
+  .chip.CHANGES { background: var(--changes-bg); color: var(--changes); }
+  .chip.pending.live { background: var(--live-bg); color: var(--live); animation: pulse 1.4s ease-in-out infinite; }
+  .chip.skipped { text-decoration: line-through; opacity: .7; }
+  .chip.bad { background: var(--human-bg); color: var(--human); }
+  .hint { margin-top: 7px; font-size: 11px; color: var(--human); }
+  .hint code { font-size: 10.5px; }
+  .hint a { color: inherit; font-weight: 600; }
+  .empty { color: var(--muted); font-size: 12px; border: 1px dashed var(--line); border-radius: 10px;
+    padding: 10px; text-align: center; }
+  /* drawer */
+  #scrim { position: fixed; inset: 0; z-index: 10; background: rgba(0,0,0,.25); display: none; }
+  #drawer { position: fixed; z-index: 20; top: 0; right: 0; height: 100%; width: min(760px, 100%); background: var(--panel);
+    border-left: 1px solid var(--line); transform: translateX(100%); transition: transform .2s;
+    display: flex; flex-direction: column; }
+  #drawer.open { transform: none; }
+  #drawer.open ~ #scrim, body.drawer #scrim { display: block; }
+  .dh { padding: 14px 16px 10px; border-bottom: 1px solid var(--line); display: flex; gap: 10px; align-items: start; }
+  .dh .t { flex: 1; min-width: 0; }
+  .dh .t div:first-child { font: 600 12px ui-monospace, monospace; color: var(--muted); }
+  .dh .t div:last-child { font-weight: 600; font-size: 15px; }
+  .close { border: 1px solid var(--line); background: transparent; color: var(--ink); border-radius: 6px;
+    padding: 2px 9px; font-size: 16px; cursor: pointer; }
+  .tabs { display: flex; gap: 4px; flex-wrap: wrap; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+  .tabs .grp { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+    align-self: center; margin: 0 2px 0 6px; }
+  .tabs .grp:first-child { margin-left: 0; }
+  .tab { border: 1px solid var(--line); background: transparent; color: var(--ink); border-radius: 6px;
+    padding: 2px 8px; font: 12px ui-monospace, monospace; cursor: pointer; }
+  .tab.on { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+  .tab.PASS, .tab.ok { border-color: var(--pass); }
+  .tab.CHANGES { border-color: var(--changes); }
+  .tab.bad { border-color: var(--human); }
+  .doc { padding: 4px 18px 40px; overflow-y: auto; flex: 1; }
+  .doc .first { margin: 14px 0 4px; padding: 6px 10px; border-radius: 6px; font: 700 13px ui-monospace, monospace;
+    background: var(--skip-bg); }
+  .first.ok { background: var(--pass-bg); color: var(--pass); }
+  .first.warn { background: var(--changes-bg); color: var(--changes); }
+  .first.bad { background: var(--human-bg); color: var(--human); }
+  .doc h1, .doc h2, .doc h3 { line-height: 1.25; margin: 18px 0 6px; }
+  .doc h1 { font-size: 19px; } .doc h2 { font-size: 15px; } .doc h3 { font-size: 13.5px; }
+  .doc code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg);
+    padding: 1px 4px; border-radius: 4px; }
+  .doc pre { background: var(--code-bg); padding: 10px 12px; border-radius: 8px; overflow-x: auto; }
+  .doc pre code { background: none; padding: 0; }
+  .doc table { border-collapse: collapse; font-size: 12.5px; display: block; overflow-x: auto; }
+  .doc th, .doc td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; }
+  .doc blockquote { margin: 8px 0; padding: 2px 12px; border-left: 3px solid var(--line); color: var(--muted); }
+  .doc a { color: var(--live); }
+  /* visual view */
+  #drawer.wide { width: min(1180px, 100%); }
+  .modes { display: flex; gap: 4px; padding: 8px 16px 0; }
+  .mode { border: 1px solid var(--line); background: transparent; color: var(--ink); border-radius: 6px 6px 0 0;
+    padding: 4px 14px; font: 600 12px ui-sans-serif, system-ui; cursor: pointer; }
+  .mode.on { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+  #d-visual { padding: 10px 18px 48px; overflow-y: auto; flex: 1; display: none; }
+  #drawer.visual #d-visual { display: block; }
+  #drawer.visual #d-tabs, #drawer.visual #d-doc { display: none; }
+  .callbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 12px; border-radius: 10px;
+    background: var(--skip-bg); margin-bottom: 14px; }
+  .callbar .what { font-weight: 600; margin-right: 6px; }
+  .cmd { display: inline-flex; align-items: center; gap: 6px; font: 12px ui-monospace, monospace; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 6px; padding: 3px 4px 3px 8px; }
+  .cmd button { border: 0; background: var(--ink); color: var(--panel); border-radius: 4px; font: 600 11px ui-sans-serif, system-ui;
+    padding: 2px 7px; cursor: pointer; }
+  .vsec { border: 1px solid var(--line); border-radius: 10px; margin-bottom: 14px; overflow: hidden; background: var(--panel); }
+  .vsec > h3 { margin: 0; padding: 9px 12px; font-size: 13px; border-bottom: 1px solid var(--line); display: flex; gap: 10px;
+    align-items: baseline; flex-wrap: wrap; }
+  .vsec > h3 .q { font-weight: 400; color: var(--muted); font-size: 12px; }
+  .vcols { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  .vcol { padding: 10px 12px; min-width: 0; }
+  .vcol + .vcol { border-left: 1px dashed var(--line); }
+  .vcol .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 6px; }
+  .mmd { overflow-x: auto; text-align: center; }
+  .mmd svg { max-width: 100%; height: auto; }
+  .mmd pre { text-align: left; font-size: 11.5px; }
+  .mmd .err { color: var(--human); font-size: 12px; text-align: left; }
+  .frames { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px; padding: 10px 12px; }
+  .frames figure { margin: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--bg); }
+  .frames figcaption { font: 11px ui-monospace, monospace; color: var(--muted); padding: 5px 8px; border-top: 1px solid var(--line);
+    display: flex; justify-content: space-between; gap: 6px; }
+  .frames iframe { width: 100%; height: 420px; border: 0; background: #fff; display: block; }
+  .frames img { width: 100%; display: block; background: #fff; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 11px; color: var(--muted); margin: 2px 0 12px; }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 4px;
+    border: 2px solid; }
+  .drift { padding: 8px 12px; font-size: 12.5px; }
+  .drift li.unexp { color: var(--human); font-weight: 600; }
+  .vempty { color: var(--muted); padding: 18px; text-align: center; border: 1px dashed var(--line); border-radius: 10px; }
+  @media (max-width: 700px) {
+    header, .flow { padding-left: 16px; padding-right: 16px; }
+    .board { grid-template-columns: 1fr; padding: 8px 16px 24px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Software Factory+</h1>
+  <span id="status">loading…</span>
+</header>
+<div class="flow">shape (you) → ready → build (implementers ∥ tickets) → review (all lenses ∥) → approve → PR open (pr mode) → merged · needs human</div>
+<div id="banner" role="alert"></div>
+<main class="board" id="board"></main>
+<aside id="drawer" aria-hidden="true" aria-label="Job files">
+  <div class="dh"><div class="t"><div id="d-id"></div><div id="d-title"></div></div>
+    <button class="close" id="d-close" aria-label="Close">×</button></div>
+  <div class="modes" role="tablist">
+    <button class="mode on" id="m-visual" role="tab">Visual</button>
+    <button class="mode" id="m-files" role="tab">Files</button>
+  </div>
+  <article id="d-visual" aria-label="Visual review"></article>
+  <nav class="tabs" id="d-tabs"></nav>
+  <article class="doc" id="d-doc"></article>
+</aside>
+<div id="scrim"></div>
+<script>
+// Serve with `python3 -m http.server` from factory/. Reads jobs/<id>/job.json and
+// the job's markdown files through the server's directory listings.
+const POLL_MS = 2000;
+const STAGES = [
+  ["shape", "Shape", "you + this session"],
+  ["ready", "Ready", "spec approved"],
+  ["build", "Build", "implementers · fixer"],
+  ["review", "Review", "all lenses in parallel"],
+  ["approve", "Approve", "approver · opus"],
+  ["pr-open", "PR open", "team review on GitHub"],
+  ["merged", "Merged", "into the base branch"],
+  ["needs-human", "Needs human", "approve · rework"],
+];
+const LIVE = new Set(["shape", "build", "review", "approve"]);
+const VERDICT_RE = /^VERDICT:\s*(PASS|CHANGES)\s*$/;
+const roundCache = new Map();   // "<id>/<n>" -> {lens: verdict}, only when complete
+let jobs = [], openId = null, openFile = null;
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+async function listDir(path) {
+  const r = await fetch(path, { cache: "no-store" });
+  if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
+  const html = await r.text();
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  return [...doc.querySelectorAll("a[href]")].map((a) => decodeURIComponent(a.getAttribute("href")))
+    .filter((h) => !h.startsWith("?") && !h.startsWith("/") && !h.startsWith(".") && !h.includes("://"));
+}
+async function getText(path) {
+  const r = await fetch(path, { cache: "no-store" });
+  return r.ok ? r.text() : null;
+}
+async function firstLine(path) {
+  const t = await getText(path);
+  return t === null ? null : (t.split(/\r?\n/).find((l) => l.trim() !== "") || "").trim();
+}
+
+async function loadJobs() {
+  const probe = await fetch("jobs/", { cache: "no-store" });
+  if (probe.status === 404) return [];   // no job yet: factory/jobs/ is created by the first job
+  const dirs = (await listDir("jobs/")).filter((h) => h.endsWith("/")).map((h) => h.slice(0, -1));
+  const out = [];
+  for (const id of dirs.sort()) {
+    const t = await getText(`jobs/${id}/job.json`);
+    if (t === null) continue;
+    try { out.push(JSON.parse(t)); }
+    catch { out.push({ id, title: "job.json is not valid JSON", stage: "?", _broken: true }); }
+  }
+  return out;
+}
+
+async function pastRounds(job) {
+  const rows = [];
+  for (let n = 1; n < (job.round || 0); n++) {
+    const key = `${job.id}/${n}`;
+    if (roundCache.has(key)) { rows.push([n, roundCache.get(key)]); continue; }
+    const lenses = Object.keys(job.reviews || {});
+    const vals = await Promise.all(lenses.map(async (l) => {
+      if ((job.reviews || {})[l] === "skipped") return "skipped";
+      const fl = await firstLine(`jobs/${job.id}/round-${n}/review-${l}.md`);
+      const m = fl && fl.match(VERDICT_RE);
+      return fl === null ? "missing" : m ? m[1] : "invalid";
+    }));
+    const v = Object.fromEntries(lenses.map((l, i) => [l, vals[i]]));
+    if (Object.values(v).every((x) => x === "PASS" || x === "CHANGES" || x === "skipped")) roundCache.set(key, v);
+    rows.push([n, v]);
+  }
+  return rows;
+}
+
+function chip(lens, val, live) {
+  const known = ["PASS", "CHANGES", "pending", "skipped"].includes(val);
+  const cls = known ? val : "bad";
+  const title = `${lens}: ${val}`;
+  return `<span class="chip ${cls}${live && val === "pending" ? " live" : ""}" title="${esc(title)}">${esc(lens)}${known ? "" : " ?"}</span>`;
+}
+
+function fmtTok(n) { return n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n); }
+function tokenLine(job) {
+  const t = job.tokens || {}; const vals = Object.values(t).filter((v) => typeof v === "number");
+  const total = job.tokens_total || vals.reduce((a, b) => a + b, 0);
+  return total ? `≈ ${fmtTok(total)} tokens` : "";
+}
+function cardHtml(job, past) {
+  const [num, ...rest] = String(job.id).split("-");
+  const live = LIVE.has(job.stage);
+  const tickets = Object.entries(job.tickets || {});
+  const done = tickets.filter(([, s]) => s === "done").length;
+  let h = `<div class="id"><span>${live ? '<span class="live-dot"></span>' : ""}${esc(num)} · ${esc(rest.join("-"))}</span>`
+    + (job.mode ? `<span class="badge">${esc(job.mode)}</span>` : "") + `</div>`
+    + `<div class="title">${esc(job.title || job.feature || "")}</div>`
+    + (tokenLine(job) ? `<div class="label" title="token ledger in job.json">${esc(tokenLine(job))}</div>` : "");
+  if (tickets.length) {
+    h += `<div class="label">tickets ${done}/${tickets.length}</div><div class="tickets">`
+      + tickets.map(([k, s]) => `<span class="tk ${esc(s)}" title="${esc(k)}: ${esc(s)}">${esc(k.split("-")[0])}</span>`).join("")
+      + `</div>`;
+  }
+  if ((job.round || 0) > 0) {
+    h += `<div class="label">reviews</div>`;
+    for (const [n, v] of past) {
+      h += `<div class="round"><span class="r">R${n}</span>${Object.entries(v).map(([l, x]) => chip(l, x, false)).join("")}</div>`;
+    }
+    h += `<div class="round"><span class="r">R${job.round}</span>${Object.entries(job.reviews || {}).map(([l, x]) => chip(l, x, job.stage === "review")).join("")}</div>`;
+  }
+  if (job.stage === "needs-human") {
+    h += `<div class="hint">your call: <code>/factory approve ${esc(job.id)}</code> or <code>/factory rework ${esc(job.id)} …</code></div>`;
+  }
+  if (job.pr_url && /^https?:\/\//.test(job.pr_url)) {
+    const done = job.stage === "merged";
+    h += `<div class="hint" style="color:var(--${done ? "pass" : "live"})"><a href="${esc(job.pr_url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${/\/pull\/\d+/.test(job.pr_url) ? "PR #" + esc(job.pr_url.match(/\/pull\/(\d+)/)[1]) : "open the PR"} ↗</a>`
+      + (job.stage === "pr-open" ? ` · <code>/factory watch ${esc(job.id)}</code>` : "")
+      + (job.ci && job.stage === "pr-open" ? ` · CI <b style="color:var(--${job.ci === "passed" ? "pass" : job.ci === "failed" ? "human" : "muted"})">${esc(job.ci)}</b>` : "") + `</div>`;
+  }
+  if (job.stage === "ready") {
+    h += `<div class="hint" style="color:var(--muted)">start: <code>/factory run ${esc(job.id)}</code></div>`;
+  }
+  return h;
+}
+
+async function render() {
+  const board = $("board"), banner = $("banner");
+  const pasts = await Promise.all(jobs.map(pastRounds));
+  const unknown = jobs.filter((j) => !STAGES.some(([s]) => s === j.stage));
+  banner.style.display = unknown.length ? "block" : "none";
+  banner.textContent = unknown.map((j) => `Job ${j.id} has unknown stage "${j.stage}"`).join(" · ");
+  const html = STAGES.map(([s, name, sub]) => {
+    const here = jobs.map((j, i) => [j, pasts[i]]).filter(([j]) => j.stage === s);
+    const cards = here.length
+      ? here.map(([j, p]) => `<div class="card${s === "needs-human" ? " needs" : ""}" tabindex="0" role="button" data-id="${esc(j.id)}">${cardHtml(j, p)}</div>`).join("")
+      : `<div class="empty">—</div>`;
+    return `<section class="col${s === "needs-human" ? " human" : ""}"><h2>${name}<span class="count">${here.length || ""}</span></h2><div class="sub">${sub}</div>${cards}</section>`;
+  }).join("");
+  if (html === board.dataset.last) return;   // unchanged: keep focus and hover state
+  const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.id : null;
+  board.innerHTML = html; board.dataset.last = html;
+  board.querySelectorAll(".card").forEach((c) => {
+    c.onclick = () => openDrawer(c.dataset.id);
+    c.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDrawer(c.dataset.id); } };
+    if (focused && c.dataset.id === focused) c.focus();
+  });
+}
+
+async function poll() {
+  try {
+    jobs = await loadJobs();
+    await render();
+    const live = jobs.filter((j) => LIVE.has(j.stage)).length;
+    $("status").textContent = `${jobs.length} job${jobs.length === 1 ? "" : "s"} · ${live} running · updated ${new Date().toLocaleTimeString()}`;
+    if (openId) await refreshDrawer();
+    if (!hashDone) { hashDone = true; openFromHash(); }
+  } catch (e) {
+    $("status").textContent = `can't read jobs/ (${e.message}). Serve this folder with: python3 -m http.server`;
+  }
+  setTimeout(poll, POLL_MS);
+}
+
+// ---------- deep link: dashboard.html#job=<job-id> opens that job's Visual view ----------
+let hashDone = false;
+function openFromHash() {
+  const m = location.hash.match(/^#job=([^&]+)/);
+  const id = m ? decodeURIComponent(m[1]) : null;
+  if (id && jobs.some((j) => j.id === id)) { setMode("visual"); openDrawer(id); }
+}
+window.addEventListener("hashchange", openFromHash);
+
+// ---------- drawer ----------
+async function walk(base, prefix = "") {
+  let files = [];
+  for (const h of await listDir(base + prefix)) {
+    if (h.endsWith("/")) files = files.concat(await walk(base, prefix + h));
+    else files.push(prefix + h);
+  }
+  return files;
+}
+function groupOf(f) {
+  if (["spec.md", "source.md"].includes(f) || f.startsWith("tickets/") || f.startsWith("domain/")) return "spec";
+  if (f.startsWith("build/")) return "build";
+  if (/^round-\d+\//.test(f)) return f.split("/")[0];
+  return "outcome";
+}
+function sortFiles(files) {
+  const order = (f) => {
+    const g = groupOf(f);
+    if (g === "spec") return [0, f === "spec.md" ? "" : f === "source.md" ? "0" : f];
+    if (g === "build") return [1, f];
+    if (g.startsWith("round-")) return [2 + Number(g.slice(6)) / 1000, f];
+    return [9, ["decision.md", "pr.md", "approval.md"].indexOf(f) + 10 + f];
+  };
+  return files.sort((a, b) => { const x = order(a), y = order(b); return x[0] - y[0] || String(x[1]).localeCompare(String(y[1])); });
+}
+function lineClass(l) {
+  if (/^(VERDICT:\s*PASS|APPROVE|APPROVED BY|STATUS:\s*(READY|MERGED))/.test(l)) return "ok";
+  if (/^VERDICT:\s*CHANGES/.test(l)) return "warn";
+  if (/^(ESCALATE|STATUS:\s*(BLOCKED|FAILED))/.test(l)) return "bad";
+  return "";
+}
+async function openDrawer(id) {
+  openId = id; openFile = null; lastVisualSig = "";
+  $("drawer").classList.add("open"); $("drawer").setAttribute("aria-hidden", "false");
+  document.body.classList.add("drawer");
+  await refreshDrawer();
+  $("d-close").focus();
+}
+function setMode(m) {
+  viewMode = m;
+  $("drawer").classList.toggle("visual", m === "visual");
+  $("drawer").classList.toggle("wide", m === "visual");
+  $("m-visual").classList.toggle("on", m === "visual");
+  $("m-files").classList.toggle("on", m === "files");
+  lastTabsKey = ""; lastVisualSig = "";
+  if (openId) refreshDrawer();
+}
+function closeDrawer() {
+  openId = null; $("drawer").classList.remove("open"); $("drawer").setAttribute("aria-hidden", "true");
+  document.body.classList.remove("drawer");
+}
+let lastTabsKey = "";
+async function refreshDrawer() {
+  const job = jobs.find((j) => j.id === openId);
+  if (!job) return closeDrawer();
+  $("d-id").textContent = `${job.id} · ${job.stage}${job.round ? " · round " + job.round : ""}`;
+  $("d-title").textContent = job.title || job.feature || "";
+  const all = await walk(`jobs/${job.id}/`);
+  if (viewMode === "visual") { await renderVisual(job, all); return; }
+  const files = sortFiles(all.filter((f) => /\.(md|mmd)$/.test(f)));
+  if (!openFile || !files.includes(openFile)) openFile = files[0] || null;
+  const firsts = await Promise.all(files.map((f) => firstLine(`jobs/${job.id}/${f}`)));
+  let html = "", grp = null;
+  files.forEach((f, i) => {
+    const g = groupOf(f);
+    if (g !== grp) { grp = g; html += `<span class="grp">${esc(g)}</span>`; }
+    const lc = lineClass(firsts[i] || "");
+    const vcls = lc === "ok" ? "PASS" : lc === "warn" ? "CHANGES" : lc;
+    const label = f.replace(/^round-\d+\//, "").replace(/^review-/, "").replace(/\.md$/, "");
+    html += `<button class="tab ${vcls}${f === openFile ? " on" : ""}" data-f="${esc(f)}" title="${esc(f)}">${esc(label)}</button>`;
+  });
+  const key = html;
+  if (key !== lastTabsKey) {
+    $("d-tabs").innerHTML = html || `<span class="grp">no files yet</span>`;
+    $("d-tabs").querySelectorAll(".tab").forEach((b) => b.onclick = () => { openFile = b.dataset.f; lastTabsKey = ""; refreshDrawer(); });
+    lastTabsKey = key;
+  }
+  if (!openFile) { $("d-doc").innerHTML = ""; return; }
+  const text = await getText(`jobs/${job.id}/${openFile}`);
+  const newHtml = text === null ? "<p>(file not found)</p>" : openFile.endsWith(".mmd") ? `<pre><code>${esc(text)}</code></pre>` : renderMd(text);
+  if ($("d-doc").dataset.src !== openFile + "\u0000" + text) {
+    $("d-doc").innerHTML = newHtml; $("d-doc").dataset.src = openFile + "\u0000" + text;
+  }
+}
+$("d-close").onclick = closeDrawer;
+$("scrim").onclick = closeDrawer;
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && openId) closeDrawer(); });
+
+
+// ---------- visual view ----------
+let viewMode = "visual", lastVisualSig = "", mermaidReady = null, mmdSeq = 0;
+setMode("visual");
+$("m-visual").onclick = () => setMode("visual");
+$("m-files").onclick = () => setMode("files");
+
+const VISUALS = [
+  ["context", "Context", "who and what is involved"],
+  ["solution", "Solution", "what this job adds or changes"],
+  ["interaction", "Interaction", "the main story, step by step"],
+  ["logical", "Logical / data", "entities and types"],
+  ["deployment", "Deployment", "where it runs"],
+  ["ux-journey", "UX journey", "screens and states"],
+];
+const LEGEND = `<div class="legend">
+  <span><i style="background:#dcf3e5;border-color:#1f8a4c"></i>new</span>
+  <span><i style="background:#fdf0dd;border-color:#b45f06"></i>changed</span>
+  <span><i style="background:#f0efeb;border-color:#8a8983"></i>existing</span>
+  <span><i style="background:#fff;border-color:#8a8983;border-style:dashed"></i>external</span>
+  <span><i style="background:#fbe6ee;border-color:#b4235a"></i>risk (policy / compliance)</span></div>`;
+
+function loadMermaid() {
+  if (mermaidReady) return mermaidReady;
+  const tryLoad = (src) => new Promise((ok, bad) => {
+    const sc = document.createElement("script"); sc.src = src; sc.onload = ok; sc.onerror = bad; document.head.appendChild(sc);
+  });
+  mermaidReady = tryLoad("https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js")
+    .catch(() => tryLoad("vendor/mermaid.min.js"))
+    .then(() => {
+      const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+      window.mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: dark ? "dark" : "neutral",
+        flowchart: { htmlLabels: true, curve: "basis" }, sequence: { mirrorActors: false } });
+      return window.mermaid;
+    })
+    .catch(() => null);
+  return mermaidReady;
+}
+
+function parseIndex(md) {
+  const map = {};
+  for (const line of (md || "").split("\n")) {
+    const m = line.match(/^\|\s*`?([\w.\-\/]+\.(?:mmd|html))`?\s*\|([^|]*)\|([^|]*)\|/);
+    if (m) map[m[1].replace(/^.*\//, "")] = { shows: m[2].trim(), check: m[3].trim() };
+  }
+  return map;
+}
+function ticketGraph(job, tickets) {
+  if (!tickets.length) return "";
+  const st = job.tickets || {};
+  let g = "%% Tickets and their blocking edges, coloured by status\nflowchart LR\n";
+  for (const t of tickets) {
+    const label = t.title.replace(/[`*_#]/g, "").replace(/"/g, "'");
+    g += `  t${t.nn}["${t.nn}: ${label}"]:::${(st[t.stem] || "pending").replace(/[^a-z]/g, "")}\n`;
+  }
+  for (const t of tickets) for (const b of t.blockers) if (tickets.some((x) => x.nn === b)) g += `  t${b} --> t${t.nn}\n`;
+  g += "  classDef done fill:#dcf3e5,stroke:#1f8a4c,color:#0d3d22\n  classDef building fill:#e4ecfd,stroke:#2463eb,color:#0b2a6b\n" +
+       "  classDef pending fill:#f0efeb,stroke:#8a8983,color:#3a3a37\n  classDef blocked fill:#fbe6ee,stroke:#b4235a,color:#5a0f2b\n";
+  return g;
+}
+function mmdBox(code) { return `<div class="mmd" data-code="${esc(code)}"><pre><code>${esc(code)}</code></pre></div>`; }
+function cmd(c) { return `<span class="cmd">${esc(c)}<button data-copy="${esc(c)}">copy</button></span>`; }
+
+async function renderVisual(job, all) {
+  const base = `jobs/${job.id}/`;
+  const want = all.filter((f) => /^visuals\//.test(f) || /^tickets\/.*\.md$/.test(f) || f === "decision.md");
+  const texts = {};
+  await Promise.all(want.filter((f) => !/\.(png|jpe?g|gif|webp|html)$/.test(f)).map(async (f) => { texts[f] = await getText(base + f); }));
+  const shots = all.filter((f) => /^round-\d+\/screens\/.+\.(png|jpe?g|webp)$/i.test(f));
+  const lastRound = shots.reduce((m, f) => Math.max(m, Number(f.match(/^round-(\d+)/)[1])), 0);
+  const latestShots = shots.filter((f) => f.startsWith(`round-${lastRound}/`)).sort();
+  const wires = all.filter((f) => /^visuals\/ui-[^/]+\.html$/.test(f)).sort();
+  const sig = JSON.stringify([job, texts, latestShots, wires]);
+  if (sig === lastVisualSig) return;
+  lastVisualSig = sig;
+
+  // the decision bar
+  const first = (texts["decision.md"] || "").split("\n").find((l) => l.trim()) || "";
+  const chips = Object.entries(job.reviews || {}).map(([l, v]) => chip(l, v, false)).join("");
+  let call = "";
+  if (job.stage === "ready") call = `<span class="what">Spec ready. Approve by running:</span>${cmd(`/factory run ${job.id}`)}`;
+  else if (job.stage === "needs-human") call = `<span class="what">Your call${first ? ` (${esc(first)})` : ""}:</span>${cmd(`/factory approve ${job.id}`)}${cmd(`/factory rework ${job.id} `)}`;
+  else if (job.stage === "pr-open") call = `<span class="what">On GitHub${job.pr_url ? `: <a href="${esc(job.pr_url)}" target="_blank" rel="noopener">${esc(job.pr_url.replace(/^https?:\/\//, ""))}</a>` : ""}</span>${job.ci ? `<span class="what">CI ${esc(job.ci)}</span>` : ""}${cmd(`/factory watch ${job.id}`)}${cmd(`/factory rework ${job.id} --from-pr`)}`;
+  else if (job.stage === "shape") call = `<span class="what">Being shaped in the conversation; approve the spec there.</span>`;
+  else if (job.stage === "merged") call = `<span class="what">Merged.</span>`;
+  else call = `<span class="what">Agents working (${esc(job.stage)}).</span>`;
+  let h = `<div class="callbar">${call}<span style="flex:1"></span>${(job.round || 0) > 0 ? chips : ""}</div>`;
+  const tk = Object.entries(job.tokens || {}).filter(([, v]) => typeof v === "number").sort((a, b) => b[1] - a[1]);
+  if (tk.length) {
+    const tot = tk.reduce((a, [, v]) => a + v, 0) || 1;
+    h += `<div class="legend" title="from the token ledger in job.json"><b>${esc(tokenLine(job))}</b>` + tk.slice(0, 8).map(([k, v]) => `<span>${esc(k)} ${fmtTok(v)} (${Math.round(100 * v / tot)}%)</span>`).join("") + (tk.length > 8 ? `<span>+${tk.length - 8} more</span>` : "") + `</div>`;
+  }
+
+  const idxPlan = parseIndex(texts["visuals/index.md"]), idxBuilt = parseIndex(texts["visuals/as-built/index.md"]);
+  const anyVisual = Object.keys(texts).some((f) => f.endsWith(".mmd")) || wires.length || latestShots.length;
+  const tickets = Object.keys(texts).filter((f) => f.startsWith("tickets/")).sort().map((f) => {
+    const t = texts[f] || ""; const stem = f.slice(8, -3); const nn = stem.split("-")[0];
+    const title = ((t.match(/^#\s*\d+\s*:\s*(.+)$/m) || [])[1] || stem).trim();
+    const bl = ((t.match(/\*\*Blocked by:\*\*\s*(.+)$/m) || [])[1] || "");
+    return { stem, nn, title, blockers: /none/i.test(bl) ? [] : (bl.match(/\d{2}/g) || []) };
+  });
+
+  if (!anyVisual) {
+    h += `<div class="vempty">No visuals yet. The visualizer draws them at the spec gate${tickets.length ? "; the ticket graph is below" : ""}.</div>`;
+  } else {
+    h += LEGEND;
+    const drift = texts["visuals/as-built/drift.md"];
+    if (drift) {
+      const items = drift.split("\n").filter((l) => /^\s*[-*]\s+/.test(l))
+        .map((l) => `<li class="${/\bUNEXPLAINED\b/.test(l) ? "unexp" : ""}">${inline(l.replace(/^\s*[-*]\s+/, ""))}</li>`).join("");
+      h += `<section class="vsec"><h3>Plan vs as-built <span class="q">what changed between the approved plan and the code</span></h3><div class="drift"><ul>${items || "<li>No drift.</li>"}</ul></div></section>`;
+    }
+    for (const [name, title, hint] of VISUALS) {
+      const plan = texts[`visuals/${name}.mmd`], built = texts[`visuals/as-built/${name}.mmd`];
+      if (!plan && !built) continue;
+      const meta = idxBuilt[`${name}.mmd`] || idxPlan[`${name}.mmd`] || {};
+      const lead = ((plan || built).match(/^%%\s*(.+)$/m) || [])[1] || hint;
+      const cols = [plan && ["Planned", plan], built && ["As built", built]].filter(Boolean)
+        .map(([lbl, code]) => `<div class="vcol">${plan && built ? `<div class="lbl">${lbl}</div>` : ""}${mmdBox(code)}</div>`).join("");
+      h += `<section class="vsec"><h3>${esc(title)} <span class="q">${esc(lead)}${meta.check ? " · <b>Check:</b> " + esc(meta.check) : ""}</span></h3><div class="vcols">${cols}</div></section>`;
+    }
+    if (wires.length || latestShots.length) {
+      const figs = wires.map((f) => `<figure><iframe sandbox src="${esc(base + f)}" title="${esc(f)}" loading="lazy"></iframe><figcaption><span>wireframe · ${esc(f.slice(8))}</span><a href="${esc(base + f)}" target="_blank" rel="noopener">open</a></figcaption></figure>`)
+        .concat(latestShots.map((f) => `<figure><a href="${esc(base + f)}" target="_blank" rel="noopener"><img src="${esc(base + f)}" alt="${esc(f)}" loading="lazy"></a><figcaption><span>screenshot · round ${lastRound} · ${esc(f.replace(/^.*\//, ""))}</span></figcaption></figure>`)).join("");
+      h += `<section class="vsec"><h3>UI <span class="q">wireframes from the plan${latestShots.length ? ", screenshots of what was built" : ""}</span></h3><div class="frames">${figs}</div></section>`;
+    }
+  }
+  const tg = ticketGraph(job, tickets);
+  if (tg) h += `<section class="vsec"><h3>Tickets <span class="q">build order and status · green done, blue building, grey pending, pink blocked</span></h3><div class="vcols"><div class="vcol">${mmdBox(tg)}</div></div></section>`;
+
+  const root = $("d-visual"); const keep = root.scrollTop;
+  root.innerHTML = h; root.scrollTop = keep;
+  root.querySelectorAll("button[data-copy]").forEach((b) => b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "copied"; } catch { b.textContent = "select it"; }
+    setTimeout(() => (b.textContent = "copy"), 1500);
+  });
+  const boxes = [...root.querySelectorAll(".mmd")];
+  if (!boxes.length) return;
+  const mm = await loadMermaid();
+  if (!mm) { boxes.forEach((b) => b.insertAdjacentHTML("afterbegin", `<div class="err">Diagram library unavailable (offline?). Showing source; put mermaid.min.js in factory/vendor/ to render offline.</div>`)); return; }
+  for (const b of boxes) {
+    const code = b.dataset.code;
+    try { const { svg } = await mm.render(`mmd${++mmdSeq}`, code); b.innerHTML = svg; }
+    catch (e) { b.insertAdjacentHTML("afterbegin", `<div class="err">Diagram error: ${esc(String(e.message || e).split("\n")[0])}</div>`); }
+  }
+}
+
+// ---------- tiny markdown renderer ----------
+function inline(s) {
+  const codes = [];
+  s = esc(s).replace(/`([^`]+)`/g, (_, c) => { codes.push(c); return `\u0000${codes.length - 1}\u0000`; });
+  s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/(^|[^*\w])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>");
+  s = s.replace(/(^|\W)_([^_\s][^_]*)_(?=\W|$)/g, "$1<em>$2</em>");
+  s = s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  return s.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[Number(i)]}</code>`);
+}
+function renderMd(md) {
+  const lines = md.replace(/\r/g, "").split("\n");
+  let out = "", i = 0;
+  while (i < lines.length && lines[i].trim() === "") i++;
+  if (i < lines.length) {
+    const lc = lineClass(lines[i].trim());
+    if (lc) { out += `<div class="first ${lc}">${esc(lines[i].trim())}</div>`; i++; }
+  }
+  let list = null;
+  const closeList = () => { if (list) { out += `</${list}>`; list = null; } };
+  for (; i < lines.length; i++) {
+    const l = lines[i];
+    if (/^\s{0,3}```/.test(l)) {
+      closeList(); const buf = [];
+      for (i++; i < lines.length && !/^\s{0,3}```/.test(lines[i]); i++) buf.push(lines[i]);
+      out += `<pre><code>${esc(buf.join("\n"))}</code></pre>`; continue;
+    }
+    if (/^\s*\|.*\|\s*$/.test(l) && i + 1 < lines.length && /^\s*\|?[\s:|-]+\|?\s*$/.test(lines[i + 1]) && lines[i + 1].includes("-")) {
+      closeList();
+      const cells = (r) => r.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+      out += "<table><thead><tr>" + cells(l).map((c) => `<th>${inline(c)}</th>`).join("") + "</tr></thead><tbody>";
+      for (i += 2; i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i]); i++) out += "<tr>" + cells(lines[i]).map((c) => `<td>${inline(c)}</td>`).join("") + "</tr>";
+      i--; out += "</tbody></table>"; continue;
+    }
+    let m;
+    if ((m = l.match(/^(#{1,4})\s+(.*)$/))) { closeList(); const n = Math.min(m[1].length, 3); out += `<h${n}>${inline(m[2])}</h${n}>`; continue; }
+    if ((m = l.match(/^>\s?(.*)$/))) { closeList(); out += `<blockquote>${inline(m[1])}</blockquote>`; continue; }
+    if ((m = l.match(/^\s*[-*]\s+(.*)$/))) { if (list !== "ul") { closeList(); out += "<ul>"; list = "ul"; } out += `<li>${inline(m[1].replace(/^\[( |x)\]\s*/, (_, x) => x === "x" ? "☑ " : "☐ "))}</li>`; continue; }
+    if ((m = l.match(/^\s*\d+[.)]\s+(.*)$/))) { if (list !== "ol") { closeList(); out += "<ol>"; list = "ol"; } out += `<li>${inline(m[1].replace(/^\[( |x)\]\s*/, (_, x) => x === "x" ? "☑ " : "☐ "))}</li>`; continue; }
+    if (/^\s*$/.test(l)) { closeList(); continue; }
+    if (list && /^\s{2,}\S/.test(l)) { out = out.replace(/<\/li>$/, " " + inline(l.trim()) + "</li>"); continue; }
+    closeList(); out += `<p>${inline(l)}</p>`;
+  }
+  closeList();
+  return out;
+}
+
+poll();
+</script>
+</body>
+</html>

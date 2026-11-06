@@ -1688,7 +1688,10 @@ export function App() {
   };
 
   const openSessionFromInbox = (sid: string, ws: string, ag: string) => selectSession(sid, ws, ag);
+  // F-011: a session the human picked outranks the persona's resume target.
+  const explicitSelection = useRef(false);
   const selectSession = async (id: string, ws: string, ag: string) => {
+    explicitSelection.current = true; // set before any await; cleared when a persona is chosen
     setSurface("session"); // selecting a conversation always returns to the conversation view
     setTodo([]);
     setStreaming("");
@@ -1782,7 +1785,10 @@ export function App() {
       if (!gatesWorkspace(name)) setShowGate(false);
       else if (targetWorkspace) setShowGate(false);
       else setShowGate(true);
-      setSessionId(target.sessionId);
+      // F-011: do not replace a session the user just picked with the persona's
+      // resume target. The flag is consumed here.
+      if (!explicitSelection.current) setSessionId(target.sessionId);
+      explicitSelection.current = false;
       try {
         const messages = await getSessionMessages(target.sessionId);
         setItems(itemsFromMessages(messages));

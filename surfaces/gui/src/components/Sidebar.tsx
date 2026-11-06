@@ -586,6 +586,7 @@ export function Sidebar(props: Props) {
             : "hover:bg-panel") +
           (s.machine_offline ? " opacity-45" : "")
         }
+        data-testid={`session-row-${s.session_id}`}
         onClick={() => {
           if (!editing) props.onSelectSession(s.session_id, s.workspace, s.agent);
         }}
@@ -667,6 +668,7 @@ export function Sidebar(props: Props) {
           (s.machine_offline ? " opacity-45" : "")
         }
         title={editing ? undefined : s.machine_offline ? t("onmachine.sidebar.row_offline", { title, machine: s.machine_name || t("onmachine.machine_fallback") }) : title}
+        data-testid={`session-row-${s.session_id}`}
         onClick={() => {
           if (!editing) props.onSelectSession(s.session_id, s.workspace, s.agent);
         }}
