@@ -38,6 +38,55 @@ def content_sha256(receipt: dict[str, Any]) -> str:
     return hashlib.sha256(canonical_bytes(receipt)).hexdigest()
 
 
+def receipt_body(
+    *,
+    data: dict[str, Any],
+    channel: str | None,
+    ref: str | None,
+    received_at: str | None,
+    session_id: str | None,
+    inbox_id: str | None,
+) -> dict[str, Any]:
+    """The exact bytes a consumer will file, built BEFORE the envelope is sealed.
+
+    Pure: no clock, no I/O, no store lookup. F-012 requires that what we digest and what we emit
+    come from one function — two builders would drift, and a drifted receipt is signed evidence
+    that says something the human never approved.
+    """
+    steps = data.get("steps") or []
+    sig = data.get("signature") or None
+    return {
+        "receipt_version": 1,
+        "work_item": {"channel": channel, "ref": ref, "received_at": received_at},
+        "agent": data.get("agent"),
+        "status": ("sealed" if sig else
+                   "rejected" if data.get("not_found") else
+                   "error" if data.get("error") else
+                   "awaiting_signature" if data.get("awaiting_signoff") else "unknown"),
+        "decision": data.get("decision"),
+        "error": data.get("error") or None,
+        "reason": ("request id not found in the pack's records" if data.get("not_found")
+                   else None),
+        "sealed": bool(sig),
+        "awaiting_signoff": bool(data.get("awaiting_signoff")) and not sig,
+        "signature": sig,
+        "steps": [{"n": i + 1,
+                   "from_state": s.get("state_before"),
+                   "to_state": s.get("state_after"),
+                   "summary": s.get("summary"),
+                   "sha256": s.get("sha256")} for i, s in enumerate(steps)],
+        "evidence": {"fabric_run": data.get("fabric_run"),
+                     "envelopes": len(steps),
+                     "chain_head": steps[-1].get("sha256") if steps else None},
+        "harness": {"session_id": session_id, "inbox_id": inbox_id},
+    }
+
+
+def digest_for_signing(body: dict[str, Any]) -> str:
+    """The value to seal into the decision envelope so the signature covers this body."""
+    return content_sha256(body)
+
+
 def seal_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
     """Attach the integrity block. Returns a new dict; the input is not mutated."""
     body = {k: v for k, v in receipt.items() if k != INTEGRITY_KEY}

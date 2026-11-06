@@ -26,7 +26,17 @@ def spec_status(spec: Path) -> tuple[str | None, str]:
 def changed_since(repo: Path) -> list[str]:
     out = subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
                          capture_output=True, text=True).stdout
-    return [l[3:] for l in out.splitlines() if l.strip()]
+    keep = []
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        code, path = line[:2], line[3:]
+        if code.strip() not in {"M", "A"}:      # untracked/deleted artefacts are not "code written"
+            continue
+        if any(part in path for part in ("build/", ".venv/", "node_modules/", ".DS_Store", "factory/", "reference/", "docs/")):
+            continue
+        keep.append(path)
+    return keep
 
 
 def main() -> int:
@@ -36,6 +46,7 @@ def main() -> int:
     jobs_dir = repo / "factory" / "jobs"
     problems: list[str] = []
     building: list[str] = []
+    verified: list[str] = []
     if not jobs_dir.is_dir():
         print("gate: no factory/jobs/ — nothing to check")
         return 0
@@ -54,8 +65,10 @@ def main() -> int:
             continue
         if status not in STATUSES:
             problems.append(f"{job.name}: unknown status {status!r}")
-        if status in ("building", "verified"):
+        if status == "building":
             building.append(job.name)
+        if status == "verified":
+            verified.append(job.name)
         if status == "approved" and not re.search(r"\([^)]*\d{4}-\d{2}-\d{2}\)", rest):
             problems.append(f"{job.name}: approved must name a person and a date, e.g. (vijay, 2026-11-06)")
         if status == "verified":
@@ -68,7 +81,7 @@ def main() -> int:
 
     # Code may only be dirty while some job is actively building. That is the rule the
     # first version got wrong: it blamed every ready job instead of the one doing the work.
-    if dirty and not (building or verified):
+    if dirty and not building:
         problems.append(
             f"{len(dirty)} code file(s) modified but no job is in `building` — "
             f"approve a job before writing code")

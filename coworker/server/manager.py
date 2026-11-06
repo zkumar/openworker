@@ -8129,35 +8129,11 @@ class SessionManager:
         d = item.data or {}
         steps = d.get("steps") or []
         sig = d.get("signature") or None
-        receipt = {
-            "receipt_version": 1,
-            "work_item": {"channel": d.get("channel"),
-                          "ref": self._record_ref(d.get("record")),
-                          "received_at": item.created_at},
-            "agent": d.get("agent"),
-            "status": ("sealed" if sig else
-                       "rejected" if d.get("not_found") else
-                       "error" if d.get("error") else
-                       "awaiting_signature" if d.get("awaiting_signoff") else "unknown"),
-            "decision": d.get("decision"),
-            "error": d.get("error") or None,
-            "reason": ("request id not found in the pack's records" if d.get("not_found")
-                       else None),
-            "sealed": bool(sig),
-            "awaiting_signoff": bool(d.get("awaiting_signoff")) and not sig,
-            "signature": sig,
-            "steps": [{"n": i + 1,
-                       "from_state": s.get("state_before"),
-                       "to_state": s.get("state_after"),
-                       "summary": s.get("summary"),
-                       "sha256": s.get("sha256")} for i, s in enumerate(steps)],
-            "evidence": {"fabric_run": d.get("fabric_run"),
-                         "envelopes": len(steps),
-                         "chain_head": steps[-1].get("sha256") if steps else None},
-            "harness": {"session_id": item.session_id, "inbox_id": item.id},
-        }
-        from coworker.receipts import seal_receipt
-        return seal_receipt(receipt)
+        from coworker.receipts import receipt_body, seal_receipt
+        # F-012: one builder for what we digest and what we emit.
+        return seal_receipt(receipt_body(
+            data=d, channel=d.get("channel"), ref=self._record_ref(d.get("record")),
+            received_at=item.created_at, session_id=item.session_id, inbox_id=item.id))
 
     def deliver_receipt(self, item_id: str) -> list[str]:
         """Emit the receipt through every egress; a failure is retried, never dropped."""
