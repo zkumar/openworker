@@ -24,6 +24,11 @@ from typing import Any
 
 INTEGRITY_KEY = "integrity"
 
+# F-012: these three exist only AFTER the human signs, so they cannot be inside what the signature
+# covers — the body would change under its own signature. The exclusion is recorded in the receipt
+# so a consumer can tell exactly what was signed.
+SIGNED_BODY_EXCLUDES = ("signature", "sealed", "status")
+
 
 def canonical_bytes(receipt: dict[str, Any]) -> bytes:
     """Deterministic bytes for a receipt: sorted keys, no whitespace drift, UTF-8.
@@ -82,9 +87,14 @@ def receipt_body(
     }
 
 
+def signing_body(body: dict[str, Any]) -> dict[str, Any]:
+    """The part of the body that cannot change after signing. Everything else is derived."""
+    return {k: v for k, v in body.items() if k not in SIGNED_BODY_EXCLUDES}
+
+
 def digest_for_signing(body: dict[str, Any]) -> str:
     """The value to seal into the decision envelope so the signature covers this body."""
-    return content_sha256(body)
+    return content_sha256(signing_body(body))
 
 
 def seal_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
@@ -94,6 +104,8 @@ def seal_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
     body[INTEGRITY_KEY] = {
         "alg": "sha256-canonical-json",
         "content_sha256": content_sha256(body),
+        "signed_body_sha256": digest_for_signing(body),
+        "signed_body_excludes": list(SIGNED_BODY_EXCLUDES),
         "envelope_sha256": sig.get("sha256"),
     }
     return body
@@ -110,8 +122,15 @@ def verify_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
     integrity = receipt.get(INTEGRITY_KEY) or {}
     claimed = integrity.get("content_sha256")
     actual = content_sha256(receipt)
+    signed_claimed = integrity.get("signed_body_sha256")
+    signed_actual = digest_for_signing(receipt)
     return {
         "ok": bool(claimed) and claimed == actual,
+        # F-012: the ONLY check a recomputed-hash forgery cannot defeat. `ok` proves nothing was
+        # edited after emission; this proves the human's signature covers these bytes.
+        "signed_over_content": bool(signed_claimed) and signed_claimed == signed_actual,
+        "signed_body_sha256": signed_actual,
+        "signed_body_claimed": signed_claimed,
         "content_sha256": actual,
         "claimed": claimed,
         "sealed": bool(receipt.get("sealed")),

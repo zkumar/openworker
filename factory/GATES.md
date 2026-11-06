@@ -12,7 +12,9 @@ A job may not be `building` until `spec` says `approved(<name>, <date>)`.
 | F-010 | verify | 2026-11-06 | agent (self) | 52 local tests + live loop (denied → gate → sealed → verify True) |
 | F-011 | spec | 2026-11-06 | vijay | approved(vijay, 2026-11-06) |
 | F-012 | spec | 2026-11-06 | vijay | approved(vijay, 2026-11-06); freeze-at-signing accepted |
-| F-012 | code t01 | 2026-11-06 | agent (self) | receipt_body + digest_for_signing; 5 tests |
+| F-012 | code t01 | 2026-11-06 | agent (self) | receipt_body + digest_for_signing; one builder |
+| F-012 | code t03 | 2026-11-06 | agent (self) | signing_body + signed_over_content; recomputed-hash forgery now detected |
+| F-012 | code t02 | — | — | HALF: digest computable and verifiable, but no call site supplies it to the fabric yet — a live run is still level 1 |
 | F-011 | diagnose | 2026-11-06 | agent (self) | cause named: `switchAgent` reassigns sessionId after a row click |
 | F-011 | code | 2026-11-06 | agent (self) | guard on `switchAgent`; verified by evidence/switch-check.txt |
 | F-011 | test | 2026-11-06 | vijay | NOT REQUIRED — owner decision: leave it. The fix is verified (evidence/switch-check.txt); the failing-first proof was attempted 4x and failed on harness flakiness, not on the product. Residual risk accepted. |
