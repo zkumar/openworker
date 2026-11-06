@@ -7,6 +7,9 @@ A job may not be `building` until `spec` says `approved(<name>, <date>)`.
 |---|---|---|---|---|
 | F-001 | spec | — | — | withdrawn as a bug: the gate renders (verified with no navigation) |
 | F-010 | spec | 2026-11-06 | vijay | approved(vijay, 2026-11-06) |
+| F-010 | code t01 | 2026-11-06 | agent (self) | connector_bridge.py — 6 tests |
+| F-010 | code t02 | 2026-11-06 | agent (self) | bindings.py — 5 tests, backoff + dead letter |
+| F-010 | verify | 2026-11-06 | agent (self) | 52 local tests + live loop (denied → gate → sealed → verify True) |
 | F-011 | spec | 2026-11-06 | vijay | approved(vijay, 2026-11-06) |
 | F-011 | diagnose | 2026-11-06 | agent (self) | cause named: `switchAgent` reassigns sessionId after a row click |
 | F-011 | code | 2026-11-06 | agent (self) | guard on `switchAgent`; verified by evidence/switch-check.txt |
