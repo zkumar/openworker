@@ -30,8 +30,10 @@
 - adds, removes or upgrades a dependency
 
 ## Gates
-- `.venv/bin/python -m pytest tests/ -q` — must not introduce NEW failures beyond the documented
-  baseline in `docs/known-failures.md`
+- `.venv/bin/python -m pytest tests/test_channel_route.py tests/test_channels.py
+  tests/test_dispatch_router.py tests/test_ingress.py tests/test_receipt_integrity.py
+  tests/test_receipt_verification.py tests/test_runstore.py tests/test_keys.py -q`
+  — the local gate. The full suite is CI-only; see `docs/known-failures.md`.
 - `cd surfaces/gui && npm run build` (tsc --noEmit + vite build)
 - `.venv/bin/ruff check <changed files>` where Python changed
 - A UI change carries before/after captures, labelled from the run log
