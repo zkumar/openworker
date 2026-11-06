@@ -8232,6 +8232,20 @@ class SessionManager:
         with httpx.Client(timeout=120) as client:
             token = client.post(f"{fabric}/api/auth/login",
                                 json={"username": "dr.md", "password": "test"}).json()["access_token"]
+            # F-012 t02: tell the fabric what the human is about to authorise, BEFORE they sign.
+            # A separate call on purpose — a signoff that could name what to sign is one an approval
+            # engine can turn into a standing rule (RFC 0041 F4). Best-effort: an older fabric that
+            # does not have the endpoint leaves the receipt at level 1 rather than failing the sign.
+            from coworker.receipts import digest_for_signing, receipt_body
+            digest = digest_for_signing(receipt_body(
+                data=approval.data or {}, channel=(approval.data or {}).get("channel"),
+                ref=self._record_ref((approval.data or {}).get("record")),
+                received_at=approval.created_at, session_id=approval.session_id,
+                inbox_id=approval.id))
+            recorded = client.post(f"{fabric}/api/runs/{fabric_run}/receipt-digest",
+                                   headers={"Authorization": f"Bearer {token}"},
+                                   json={"receipt_digest": digest})
+            digest_sealed = recorded.status_code == 200
             signed = client.post(f"{fabric}/api/runs/{fabric_run}/signoff",
                                  headers={"Authorization": f"Bearer {token}"})
             signed.raise_for_status()
