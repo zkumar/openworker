@@ -12,8 +12,11 @@ A consumer can therefore
   1. recompute the digest and detect ANY local edit, and
   2. take envelope_sha256 to the fabric chain to confirm a human signed that decision.
 
-Level 2 (not built, needs a contract change): put this digest INSIDE the envelope payload so the
-signature covers the exact emitted bytes. See docs/receipt-verification.md.
+Level 2 (built against fabric receipt-digest v1.0.0 — CONTRACTS.md §11, RFC 0053): the signing
+path computes digest_for_signing over the body, freezes that signed body on the work item, and
+posts the digest to the fabric BEFORE the human signs. The fabric seals it into the final decision
+envelope's payload, so the signature covers the exact emitted bytes. See
+docs/receipt-verification.md.
 """
 
 from __future__ import annotations
@@ -24,10 +27,16 @@ from typing import Any
 
 INTEGRITY_KEY = "integrity"
 
-# F-012: these three exist only AFTER the human signs, so they cannot be inside what the signature
-# covers — the body would change under its own signature. The exclusion is recorded in the receipt
-# so a consumer can tell exactly what was signed.
-SIGNED_BODY_EXCLUDES = ("signature", "sealed", "status")
+# F-012: these four only restate whether the signature exists, so they cannot be inside what the
+# signature covers — the body would change under its own signature. The exclusion is recorded in
+# the receipt so a consumer can tell exactly what was signed; verification always recomputes with
+# THIS constant, never the receipt's own list (a forger must not choose their own excludes).
+SIGNED_BODY_EXCLUDES = ("signature", "sealed", "status", "awaiting_signoff")
+
+# F-012: the work-item data key holding the signed body frozen at signing. The signature appends
+# the run's final sealed step, which mutates steps/evidence after the digest was computed — so the
+# emitted receipt must carry the signed fields exactly as they were digested, not as they are now.
+SIGNED_BODY_KEY = "signed_body"
 
 
 def canonical_bytes(receipt: dict[str, Any]) -> bytes:
@@ -95,6 +104,24 @@ def signing_body(body: dict[str, Any]) -> dict[str, Any]:
 def digest_for_signing(body: dict[str, Any]) -> str:
     """The value to seal into the decision envelope so the signature covers this body."""
     return content_sha256(signing_body(body))
+
+
+def emitted_body(live: dict[str, Any], frozen: dict[str, Any] | None) -> dict[str, Any]:
+    """The body to emit once a frozen signed body exists: byte-stable under its signature.
+
+    The signed fields come from the snapshot taken at signing, so the digest the fabric sealed
+    still covers them after the signature appends the final step. Only the signature-derived
+    fields (SIGNED_BODY_EXCLUDES) are read live — a sealed receipt must say it is sealed.
+    Without a snapshot (pre-signing, or an item signed before the freeze existed) the live body
+    is emitted unchanged.
+    """
+    if not frozen:
+        return live
+    out = signing_body(frozen)      # tolerate an over-wide stored snapshot
+    for k in SIGNED_BODY_EXCLUDES:
+        if k in live:
+            out[k] = live[k]
+    return out
 
 
 def seal_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
