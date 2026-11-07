@@ -37,6 +37,19 @@ except ImportError as exc:  # fail closed, actionably — never fall back to the
         "pip install 'openworker[temporal]' (temporalio is not installed)"
     ) from exc
 
+try:
+    from rfsdk_kernel.errors import ActionContractError
+
+    from coworker.rfsdk_adapters import ANCHOR_UNAVAILABLE, GovernedDispatch
+except ImportError as exc:  # fail closed, actionably — the temporal path is governed (OW-F-014)
+    raise RuntimeError(
+        "OPENWORKER_EXECUTOR=temporal needs rfsdk-kernel (OW-F-014): "
+        "uv pip install -e ../agentic-native-port/packages/kernel "
+        "(pinned to agentic-native-port commit 9dcbd01)"
+    ) from exc
+
+from pathlib import Path
+
 from .router import CapabilityRouter, FabricRefusal
 from .temporal_workflow import REFUSAL_ERROR, TASK_QUEUE, WorkItemWorkflow
 
@@ -47,10 +60,38 @@ def workflow_id(inbox_id: str) -> str:
 
 
 class _Activities:
-    """The side effects, each wrapping the existing path. `manager` is the SessionManager."""
+    """The side effects, each wrapping the existing path. `manager` is the SessionManager.
+
+    OW-F-014: the `@activity.defn` surface routes every stage through the rfsdk
+    `Dispatcher` (`GovernedDispatch`), which seals one hash-chained envelope per outcome
+    into the tenant's chain and runs the tenant policy on every call. The raw bodies below
+    stay the registered action handlers, unchanged from phase 1.
+    """
 
     def __init__(self, manager: Any) -> None:
         self.manager = manager
+        self.governed = GovernedDispatch(self, Path(manager.runs.path).parent)
+
+    def _tenant(self, inbox_id: str) -> str:
+        """The work item's tenant, stamped at ingest. No tenant, no dispatch (fail closed)."""
+        item = self.manager.inbox.get(inbox_id)
+        tenant = ((item.data or {}).get("tenant") or "") if item is not None else ""
+        if not tenant:
+            raise ApplicationError(
+                f"work item {inbox_id} carries no tenant; refusing governed dispatch "
+                "(fail closed)", non_retryable=True)
+        return tenant
+
+    def _govern(self, name: str, inbox_id: str, **extra: Any) -> dict:
+        """One governed stage. An unreadable anchor is terminal for the workflow (4xx);
+        everything else keeps its phase 1 retry semantics."""
+        try:
+            return self.governed.run(name, inbox_id, self._tenant(inbox_id), **extra)
+        except ActionContractError as exc:
+            if exc.error_code == ANCHOR_UNAVAILABLE and 400 <= (exc.status_code or 0) < 500:
+                raise ApplicationError(str(exc), type=REFUSAL_ERROR,
+                                       non_retryable=True) from exc
+            raise
 
     def _job(self, inbox_id: str) -> dict:
         row = self.manager.runs.get(inbox_id)
@@ -72,7 +113,6 @@ class _Activities:
             return {"failed": True, "refused": True, "detail": exc.detail}
         raise ApplicationError(f"fabric error (will retry): {exc.detail}") from exc
 
-    @activity.defn(name="frame_work_item")
     def frame_work_item(self, inbox_id: str) -> dict:
         job = self._job(inbox_id)
         if job.get("fabric_run"):   # an activity retry or a restart: the run is already open
@@ -90,7 +130,6 @@ class _Activities:
         self.manager.channel_set_run(inbox_id, fabric_run, agent)
         return {"framed": True, "fabric_run": fabric_run, "agent": agent}
 
-    @activity.defn(name="execute_work_item")
     def execute_work_item(self, inbox_id: str) -> dict:
         job = self._job(inbox_id)
         try:
@@ -104,7 +143,6 @@ class _Activities:
                 "decision": result.get("decision"),
                 "fabric_run": job["fabric_run"], "agent": job["agent"]}
 
-    @activity.defn(name="check_signoff")
     def check_signoff(self, inbox_id: str) -> dict:
         item = self.manager.inbox.get(inbox_id)
         if item is None:
@@ -116,7 +154,6 @@ class _Activities:
         return {"signed": bool(sig), "approver": sig.get("approver"),
                 "rejected": rejected, "by": item.resolution or ""}
 
-    @activity.defn(name="sign_work_item")
     def sign_work_item(self, inbox_id: str, approver: str) -> dict:
         item = self.manager.inbox.get(inbox_id)
         if item is None:
@@ -136,14 +173,12 @@ class _Activities:
         self.manager.record_steps(inbox_id, (signed or {}).get("steps") or [])
         return {"decision": (signed or {}).get("final_state") or (signed or {}).get("decision")}
 
-    @activity.defn(name="emit_receipt")
     def emit_receipt(self, inbox_id: str) -> dict:
         failed = self.manager.deliver_receipt(inbox_id)
         if failed:   # retryable: the receipt is derived at read time, re-delivery is keyed
             raise ApplicationError(f"egress delivery failed: {failed}")
         return {"delivered": True}
 
-    @activity.defn(name="learn_work_item")
     def learn_work_item(self, inbox_id: str) -> dict:
         item = self.manager.inbox.get(inbox_id)
         data = (item.data or {}) if item is not None else {}
@@ -151,9 +186,35 @@ class _Activities:
                                  {"agent": data.get("agent"), "decision": data.get("decision")})
         return {"ok": True}
 
+    # -- the Temporal activity surface: every stage goes through Dispatcher.dispatch -------
+
+    @activity.defn(name="frame_work_item")
+    def frame_activity(self, inbox_id: str) -> dict:
+        return self._govern("ow.frame_work_item", inbox_id)
+
+    @activity.defn(name="execute_work_item")
+    def execute_activity(self, inbox_id: str) -> dict:
+        return self._govern("ow.execute_work_item", inbox_id)
+
+    @activity.defn(name="check_signoff")
+    def check_signoff_activity(self, inbox_id: str) -> dict:
+        return self._govern("ow.check_signoff", inbox_id)
+
+    @activity.defn(name="sign_work_item")
+    def sign_activity(self, inbox_id: str, approver: str) -> dict:
+        return self._govern("ow.sign_work_item", inbox_id, approver=approver)
+
+    @activity.defn(name="emit_receipt")
+    def emit_receipt_activity(self, inbox_id: str) -> dict:
+        return self._govern("ow.emit_receipt", inbox_id)
+
+    @activity.defn(name="learn_work_item")
+    def learn_activity(self, inbox_id: str) -> dict:
+        return self._govern("ow.learn_work_item", inbox_id)
+
     def all(self) -> list:
-        return [self.frame_work_item, self.execute_work_item, self.check_signoff,
-                self.sign_work_item, self.emit_receipt, self.learn_work_item]
+        return [self.frame_activity, self.execute_activity, self.check_signoff_activity,
+                self.sign_activity, self.emit_receipt_activity, self.learn_activity]
 
 
 class TemporalExecutor:

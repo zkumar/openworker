@@ -102,6 +102,20 @@ class CapabilityRouter:
         except httpx.RequestError as exc:
             raise FabricRefusal(f"fabric unreachable: {exc}", 0) from exc
 
+    def chain(self, session_id: str) -> dict:
+        """The fabric chain read (dispatch-anchor contract v1.0.0, fabric RFC 0054).
+
+        Returns the raw response: verified, count, chain_head (the full 64-char sealed head,
+        or null on an empty or unverifiable chain), envelopes. OW-F-014 anchors the head into
+        the harness rfsdk envelope; the fail-closed decision on a null head is the caller's.
+        """
+        try:
+            return self._get(f"/api/runs/{session_id}/chain")
+        except httpx.HTTPStatusError as exc:
+            raise self._refusal(exc) from exc
+        except httpx.RequestError as exc:
+            raise FabricRefusal(f"fabric unreachable: {exc}", 0) from exc
+
     def _pursue(self, session_id: str, inputs: dict) -> Any:
         try:
             return self._post(f"/api/runs/{session_id}/pursue", {"inputs": inputs})
