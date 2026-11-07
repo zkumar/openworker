@@ -188,6 +188,11 @@ from ..teams.model import BoardNotFoundError as TeamsBoardNotFoundError
 from .manager import SessionManager, _approval_body
 
 
+def _temporal_selected() -> bool:
+    """OW-F-013: the opt-in durable executor. Unset = the thread + sweep path, byte-identical."""
+    return os.environ.get("OPENWORKER_EXECUTOR", "").strip().lower() == "temporal"
+
+
 def _start_and_dispatch(manager, name: str, payload: dict, event_id: str | None = None,
                        tenant: str = "") -> dict:
     """Create the run and drive it in the background. Shared by HTTP ingress and the consumer."""
@@ -210,6 +215,16 @@ def _start_and_dispatch(manager, name: str, payload: dict, event_id: str | None 
         # Claim it NOW. Leaving it pending while the run is in flight lets the consumer pick the
         # same event up and start a second run for one record.
         manager.ingress.mark_dispatched(event_id, session_id)
+
+    if _temporal_selected():
+        # OW-F-013: the durable workflow owns the coordination; every side effect stays in an
+        # activity wrapping the same code the thread below runs. Idempotent by workflow id.
+        from coworker.dispatch.temporal_executor import current
+
+        wid = current().submit(inbox_id)
+        return {"ok": True, "channel": item.channel, "running": True,
+                "session_id": session_id, "inbox_id": inbox_id, "event_id": event_id,
+                "executor": "temporal", "workflow_id": wid}
 
     def run() -> None:
         try:
@@ -280,6 +295,14 @@ def create_app(manager: SessionManager) -> FastAPI:
 
     app = FastAPI(title="coworker", version="0.0.0", lifespan=lifespan)
 
+    if _temporal_selected():
+        # OW-F-013: fail closed, loudly — a missing extra or an unreachable Temporal server
+        # refuses startup; nothing silently falls back to the thread path.
+        from coworker.dispatch.temporal_executor import start_executor
+
+        start_executor(manager)
+        print("[coworker] executor: temporal (OPENWORKER_EXECUTOR=temporal)")
+
     # Durable restart: runs left mid-flight by a crash are re-driven, not lost.
     # Started directly rather than via on_event, which FastAPI deprecates / no longer fires.
     def _sweep_interrupted() -> None:
@@ -287,7 +310,10 @@ def create_app(manager: SessionManager) -> FastAPI:
         time.sleep(1.0)                     # let the port bind and settings load first
         while True:
             try:
-                manager.resume_interrupted_runs()   # restart recovery AND retry after backoff
+                if not _temporal_selected():
+                    # OW-F-013: under the temporal executor the workflow owns resumption; a
+                    # second driver here would double-pursue the same fabric run.
+                    manager.resume_interrupted_runs()   # restart recovery AND retry after backoff
                 manager.deliver_pending_receipts()  # undelivered JSON receipts
                 # Records accepted before a crash and never started: dispatch them now.
                 for ev in manager.ingress.due():
@@ -496,10 +522,23 @@ def create_app(manager: SessionManager) -> FastAPI:
         )
         approver = str(body.get("approver") or "").strip()
         signed = None
+        _channel_run = bool(((_item.data if _item else None) or {}).get("fabric_run"))
         if ok and resolution not in ("deny", "reject"):
             # approving a channel gate is a SIGNATURE: the fabric seals it and the run finishes
             session_id = manager.session_of_inbox_item(item_id)
             if session_id:
+                if _temporal_selected() and _channel_run:
+                    # OW-F-013: the resolution is the Signal; the workflow's sign activity
+                    # drives the same sign_channel_item path. An item no workflow owns (started
+                    # before the executor flip) falls through to the inline path below.
+                    try:
+                        from coworker.dispatch.temporal_executor import current
+
+                        current().signal_signoff(item_id, approver or "a human approver")
+                        return {"ok": ok, "signed": None, "executor": "temporal",
+                                "signaled": True}
+                    except Exception:
+                        pass
                 try:
                     signed = manager.sign_channel_item(session_id)
                     manager.record_signature(item_id, approver or "a human approver",
@@ -507,6 +546,16 @@ def create_app(manager: SessionManager) -> FastAPI:
                     manager.record_steps(item_id, (signed or {}).get("steps") or [])
                 except Exception as exc:      # relay the fabric's refusal, never swallow it
                     return {"ok": ok, "signed": None, "sign_error": str(exc)}
+        elif ok and _temporal_selected() and _channel_run:
+            # A denial must also release the durable wait (best-effort: with no workflow to
+            # signal, the fallback poll activity closes the gate on its next timer).
+            try:
+                from coworker.dispatch.temporal_executor import current
+
+                current().signal_rejected(
+                    item_id, request.headers.get("x-openworker-actor", "") or "a human")
+            except Exception:
+                pass
         return {"ok": ok, "signed": signed}
 
     @app.get("/v1/subscriptions")
