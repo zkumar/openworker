@@ -83,6 +83,25 @@ class CapabilityRouter:
                 best = (len(overlap), card)
         return best[1] if best else None
 
+    def frame(self, item: dict, *, interactive_signoff: bool = True) -> Optional[tuple[str, str]]:
+        """The frame stage alone: pick a card and open the governed run.
+
+        Returns (session_id, agent_id), or None when no card's declared contract covers the
+        item. OW-F-013 gives the durable coordinator each stage separately; `route()` below
+        stays the single-call path the thread executor uses.
+        """
+        try:
+            card = self.pick(self._get("/api/capabilities")["capabilities"], item)
+            if card is None:
+                return None
+            start = self._post("/api/runs",
+                               {"agent_id": card["id"], "interactive_signoff": interactive_signoff})
+            return start["session_id"], card["id"]
+        except httpx.HTTPStatusError as exc:
+            raise self._refusal(exc) from exc
+        except httpx.RequestError as exc:
+            raise FabricRefusal(f"fabric unreachable: {exc}", 0) from exc
+
     def _pursue(self, session_id: str, inputs: dict) -> Any:
         try:
             return self._post(f"/api/runs/{session_id}/pursue", {"inputs": inputs})
