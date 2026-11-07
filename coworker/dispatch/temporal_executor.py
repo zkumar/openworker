@@ -188,17 +188,28 @@ class TemporalExecutor:
     async def _main(self) -> None:
         try:
             self._client = await Client.connect(self.address, namespace=self.namespace)
+            # The sandbox re-imports the workflow module's import chain; the dispatch package's
+            # __init__ pulls in the router (httpx → urllib), which the workflow never calls.
+            # Mark those as pass-through — the workflow module itself stays deterministic.
+            from temporalio.worker.workflow_sandbox import (
+                SandboxedWorkflowRunner,
+                SandboxRestrictions,
+            )
+
+            worker = Worker(
+                self._client,
+                task_queue=TASK_QUEUE,
+                workflows=[WorkItemWorkflow],
+                activities=_Activities(self.manager).all(),
+                activity_executor=concurrent.futures.ThreadPoolExecutor(max_workers=8),
+                workflow_runner=SandboxedWorkflowRunner(
+                    restrictions=SandboxRestrictions.default.with_passthrough_modules(
+                        "coworker", "httpx")),
+            )
         except BaseException as exc:   # surface it to start(); the thread ends here
             self._startup_error = exc
             self._ready.set()
             return
-        worker = Worker(
-            self._client,
-            task_queue=TASK_QUEUE,
-            workflows=[WorkItemWorkflow],
-            activities=_Activities(self.manager).all(),
-            activity_executor=concurrent.futures.ThreadPoolExecutor(max_workers=8),
-        )
         self._ready.set()
         await worker.run()
 
