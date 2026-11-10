@@ -31,6 +31,7 @@ import { ConnectorRequestCard } from "../components/ConnectorRequestCard";
 import { DirectoryRequestCard } from "../components/DirectoryRequestCard";
 import { InboxItemCard } from "../components/InboxItemCard";
 import { PlanCard } from "../components/PlanCard";
+import { RunPanel, type RunData } from "../components/RunPanel";
 import { TeamRequestCard } from "../components/TeamRequestCard";
 import { ToolRequestCard } from "../components/ToolRequestCard";
 import { WorkItemsCard } from "../components/WorkItemsCard";
@@ -88,6 +89,21 @@ export const CARDS: CardDef[] = [
       <PlanCard
         item={planItemFromPayload(s.payload)}
         onRespond={(approved, mode, feedback) => send(planResponseMessage(approved, mode, feedback))}
+      />
+    ),
+  },
+  {
+    id: "work-item",
+    title: "Work item at the gate",
+    group: "Approvals",
+    event: "channel work item (Inbox item data)",
+    states: STATES["work-item"],
+    // Rendered as the app renders the pending item above the chat: RunPanel, pending.
+    renderInline: (s, send) => (
+      <RunPanel
+        data={s.payload as RunData}
+        pending
+        onDecide={(resolution) => send({ resolution }, "POST /v1/inbox/<id>/resolve")}
       />
     ),
   },
