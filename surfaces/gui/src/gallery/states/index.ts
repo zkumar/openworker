@@ -11,6 +11,7 @@ import { planStates } from "./plan";
 import { questionStates } from "./question";
 import { teamRequestStates } from "./team-request";
 import { toolRequestStates } from "./tool-request";
+import { workItemStates } from "./work-item";
 import { workItemsStates } from "./work-items";
 import { workerDecisionStates } from "./worker-decision";
 
@@ -19,6 +20,7 @@ export const STATES = {
   plan: planStates,
   "team-request": teamRequestStates,
   "work-items": workItemsStates,
+  "work-item": workItemStates,
   "connector-request": connectorRequestStates,
   "worker-decision": workerDecisionStates,
   question: questionStates,

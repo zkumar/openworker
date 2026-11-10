@@ -9640,6 +9640,168 @@
         }
       }
     },
+    "work-item": {
+      "event": "channel work item (Inbox item data)",
+      "canonical": "payor-demo",
+      "states": {
+        "payor-demo": {
+          "channel": "email",
+          "agent": "payor.demo.prior_auth",
+          "decision": "approved",
+          "awaiting_signoff": true,
+          "running": false,
+          "fabric_run": "run-payor-demo",
+          "plan": {
+            "name": "payor-prior-auth",
+            "signoff": "part11_single",
+            "states": [
+              "requested",
+              "eligibility",
+              "coverage",
+              "provider",
+              "duplicate",
+              "quantity",
+              "frequency",
+              "step_therapy",
+              "criteria",
+              "approved",
+              "denied",
+              "pended"
+            ],
+            "gate_state": "approved"
+          },
+          "record": {
+            "request_id": "PA-2026-001",
+            "member_id": "MEM001",
+            "procedure_code": "27447",
+            "provider_npi": "1497758544",
+            "request_date": "2026-01-20",
+            "requested_service_date": "2026-02-15",
+            "requested_units": 1,
+            "clinical_notes": "Severe right knee osteoarthritis. Failed 12 weeks of physical therapy, NSAIDs and corticosteroid injections. X-ray shows bone-on-bone contact."
+          },
+          "steps": [
+            {
+              "type": "transition",
+              "summary": "Member eligible on the requested service date",
+              "state_before": "requested",
+              "state_after": "eligibility",
+              "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+              "at": "2026-11-10T09:00:00Z"
+            },
+            {
+              "type": "transition",
+              "summary": "Procedure covered under the member's plan",
+              "state_before": "eligibility",
+              "state_after": "coverage",
+              "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+              "at": "2026-11-10T09:01:00Z"
+            },
+            {
+              "type": "transition",
+              "summary": "Provider in network",
+              "state_before": "coverage",
+              "state_after": "provider",
+              "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+              "at": "2026-11-10T09:02:00Z"
+            },
+            {
+              "type": "transition",
+              "summary": "No duplicate request on file",
+              "state_before": "provider",
+              "state_after": "duplicate",
+              "sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+              "at": "2026-11-10T09:03:00Z"
+            },
+            {
+              "type": "transition",
+              "summary": "Units within the per-authorization limit",
+              "state_before": "duplicate",
+              "state_after": "quantity",
+              "sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+              "at": "2026-11-10T09:04:00Z"
+            },
+            {
+              "type": "transition",
+              "summary": "Within the frequency limit",
+              "state_before": "quantity",
+              "state_after": "frequency",
+              "sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+              "at": "2026-11-10T09:05:00Z"
+            },
+            {
+              "type": "transition",
+              "summary": "Conservative treatment documented",
+              "state_before": "frequency",
+              "state_after": "step_therapy",
+              "sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+              "at": "2026-11-10T09:06:00Z"
+            },
+            {
+              "type": "transition",
+              "summary": "Clinical criteria met",
+              "state_before": "step_therapy",
+              "state_after": "criteria",
+              "sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+              "at": "2026-11-10T09:07:00Z"
+            },
+            {
+              "type": "transition",
+              "summary": "Meets medical necessity; recommend approval",
+              "state_before": "criteria",
+              "state_after": "approved",
+              "sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+              "at": "2026-11-10T09:08:00Z"
+            }
+          ],
+          "envelopes": 9,
+          "view": {
+            "view": "1.0.0",
+            "record": [
+              {
+                "component": "header",
+                "title_field": "procedure_code",
+                "subtitle_field": "member_id"
+              },
+              {
+                "component": "field_group",
+                "label": "Clinical",
+                "fields": [
+                  "clinical_notes",
+                  "requested_units"
+                ]
+              },
+              {
+                "component": "gauge",
+                "label": "Units against per-authorization limit",
+                "value_field": "requested_units",
+                "max": 1
+              },
+              {
+                "component": "key_value",
+                "fields": [
+                  "provider_npi",
+                  "member_id",
+                  "request_date",
+                  "requested_service_date"
+                ],
+                "demoted": true
+              }
+            ],
+            "checks": {
+              "component": "timeline",
+              "numbered": true
+            },
+            "decision_labels": {
+              "approved": "Authorized",
+              "denied": "Not authorized",
+              "pended": "Pended for review"
+            }
+          }
+        }
+      },
+      "inbox": {}
+    },
     "team-request": {
       "event": "team_proposed",
       "canonical": "approval-guidance",
