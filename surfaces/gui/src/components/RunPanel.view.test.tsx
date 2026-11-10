@@ -1,6 +1,7 @@
 // The agent-declared view (view contract v1.0.0, fabric CONTRACTS.md §13) rendered in RunPanel:
 // the layout vocabulary, the atomic fallback to the generic layout, decision_labels, and the
-// harness-reserved regions that a view never changes (OW-F-015 ticket 03).
+// harness-reserved regions that a view never changes (OW-F-015 ticket 03), and the SVG chart
+// primitives with their chart-data fallback (ticket 04).
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -117,6 +118,77 @@ describe("RunPanel declared view", () => {
       const rows = Array.from(table.querySelectorAll("tr")).map((tr) => Array.from(tr.children).map((c) => c.textContent));
       expect(rows).toEqual([["Code", "Units"], ["97110", "1"], ["97140", "—"]]);
       expect(screen.getByTestId("view-other-fields").textContent).not.toContain("lines");
+    });
+  });
+
+  describe("charts", () => {
+    const visits = [{ month: "Sep", units: 2 }, { month: "Oct", units: 4 }, { month: "Nov", units: 1 }];
+
+    // the always-visible accessible table that follows a chart's drawing
+    function tableRows(figure: HTMLElement) {
+      const table = within(figure).getByRole("table");
+      return Array.from(table.querySelectorAll("tr")).map((tr) => Array.from(tr.children).map((c) => c.textContent));
+    }
+
+    it("draws a bar_chart as SVG bars with value labels, axis labels from x and y, and its table beneath", () => {
+      render(<RunPanel data={withView({ view: "1.0.0", record: [
+        { component: "bar_chart", label: "Units by month", data_field: "visits", x: "month", y: "units" },
+      ] }, { record: { ...record, visits } })} pending onDecide={vi.fn()} />);
+      const figure = within(declared()).getByRole("figure", { name: "Units by month" });
+      const svg = within(figure).getByRole("img", { name: "Units by month" });
+      expect(svg.tagName.toLowerCase()).toBe("svg");
+      expect(svg.querySelectorAll("rect[data-bar]")).toHaveLength(3);
+      const labels = Array.from(svg.querySelectorAll("text")).map((t) => t.textContent);
+      expect(labels).toEqual(expect.arrayContaining(["2", "4", "1", "Sep", "Oct", "Nov", "month", "units"]));
+      expect(svg.querySelector("animate, animateTransform, animateMotion")).toBeNull();
+      // the svg comes first, the table follows it, and the table is never hidden
+      expect(svg.compareDocumentPosition(within(figure).getByRole("table")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(tableRows(figure)).toEqual([["month", "units"], ["Sep", "2"], ["Oct", "4"], ["Nov", "1"]]);
+      expect(technicalDetails().textContent).not.toContain("Declared view not rendered");
+    });
+
+    it("draws a line_chart as one SVG trend with a labelled point per row, and its table beneath", () => {
+      render(<RunPanel data={withView({ view: "1.0.0", record: [
+        { component: "line_chart", label: "Units trend", data_field: "visits", x: "month", y: "units" },
+      ] }, { record: { ...record, visits } })} pending onDecide={vi.fn()} />);
+      const figure = within(declared()).getByRole("figure", { name: "Units trend" });
+      const svg = within(figure).getByRole("img", { name: "Units trend" });
+      expect(svg.querySelectorAll("polyline")).toHaveLength(1);
+      expect(svg.querySelector("polyline")!.getAttribute("points")!.trim().split(/\s+/)).toHaveLength(3);
+      expect(svg.querySelectorAll("circle[data-point]")).toHaveLength(3);
+      const labels = Array.from(svg.querySelectorAll("text")).map((t) => t.textContent);
+      expect(labels).toEqual(expect.arrayContaining(["2", "4", "1", "Sep", "Oct", "Nov", "month", "units"]));
+      expect(svg.querySelector("animate, animateTransform, animateMotion")).toBeNull();
+      expect(tableRows(figure)).toEqual([["month", "units"], ["Sep", "2"], ["Oct", "4"], ["Nov", "1"]]);
+      expect(technicalDetails().textContent).not.toContain("Declared view not rendered");
+    });
+
+    function gaugeFill(svg: HTMLElement) {
+      const width = (n: Element) => Number(n.getAttribute("width"));
+      return width(svg.querySelector("rect[data-fill]")!) / width(svg.querySelector("rect[data-track]")!);
+    }
+
+    it("draws a gauge as the value against a literal max, labelled, with its table beneath", () => {
+      render(<RunPanel data={withView({ view: "1.0.0", record: [
+        { component: "gauge", label: "Units against per-authorization limit", value_field: "requested_units", max: 4 },
+      ] }, { record: { ...record, requested_units: 2 } })} pending onDecide={vi.fn()} />);
+      const figure = within(declared()).getByRole("figure", { name: "Units against per-authorization limit" });
+      const svg = within(figure).getByRole("img", { name: "Units against per-authorization limit" });
+      expect(gaugeFill(svg)).toBe(0.5);
+      expect(Array.from(svg.querySelectorAll("text")).map((t) => t.textContent)).toEqual(expect.arrayContaining(["2", "4"]));
+      expect(svg.querySelector("animate, animateTransform, animateMotion")).toBeNull();
+      expect(tableRows(figure)).toEqual([["requested_units", "max"], ["2", "4"]]);
+      expect(technicalDetails().textContent).not.toContain("Declared view not rendered");
+    });
+
+    it("draws a gauge against a max_field read from the record, full past the limit", () => {
+      render(<RunPanel data={withView({ view: "1.0.0", record: [
+        { component: "gauge", label: "Units", value_field: "requested_units", max_field: "unit_limit" },
+      ] }, { record: { ...record, requested_units: 3, unit_limit: 2 } })} pending onDecide={vi.fn()} />);
+      const figure = within(declared()).getByRole("figure", { name: "Units" });
+      expect(gaugeFill(within(figure).getByRole("img", { name: "Units" }))).toBe(1);
+      expect(tableRows(figure)).toEqual([["requested_units", "unit_limit"], ["3", "2"]]);
+      expect(screen.getByTestId("view-other-fields").textContent).not.toContain("unit limit");
     });
   });
 
@@ -261,10 +333,36 @@ describe("RunPanel declared view", () => {
       expect(technicalDetails().textContent).toContain('Declared view not rendered: record[1] (table): "lines" is not a list of objects');
     });
 
-    it("falls back whole while a structurally valid chart has no renderer yet", () => {
-      render(<RunPanel data={withView({ view: "1.0.0", record: [header, { component: "gauge", label: "Units", value_field: "requested_units", max: 1 }] })} pending onDecide={vi.fn()} />);
+    const bars = { component: "bar_chart", label: "Units by month", data_field: "visits", x: "month", y: "units" };
+    const trend = { ...bars, component: "line_chart" };
+    const gauge = { component: "gauge", label: "Units", value_field: "requested_units", max: 1 };
+    const limitGauge = { component: "gauge", label: "Units", value_field: "requested_units", max_field: "unit_limit" };
+
+    it.each<[string, Record<string, unknown>, Record<string, unknown>, string]>([
+      ["bar_chart data that is missing", bars, {}, 'record[1] (bar_chart): "visits" is not a non-empty list of objects'],
+      ["bar_chart data that is not a list", bars, { visits: { month: "Sep", units: 2 } }, 'record[1] (bar_chart): "visits" is not a non-empty list of objects'],
+      ["bar_chart data that is an empty list", bars, { visits: [] }, 'record[1] (bar_chart): "visits" is not a non-empty list of objects'],
+      ["bar_chart data that is a list of non-objects", bars, { visits: [2, 4] }, 'record[1] (bar_chart): "visits" is not a non-empty list of objects'],
+      ["a bar_chart row missing its x value", bars, { visits: [{ month: "Sep", units: 2 }, { units: 4 }] }, 'record[1] (bar_chart): "visits" rows need a "month" value'],
+      ["a bar_chart row with a non-numeric y", bars, { visits: [{ month: "Sep", units: "2" }] }, 'record[1] (bar_chart): "visits" rows need a numeric "units"'],
+      ["line_chart data that is missing", trend, {}, 'record[1] (line_chart): "visits" is not a non-empty list of objects'],
+      ["a line_chart row with a missing y", trend, { visits: [{ month: "Sep" }] }, 'record[1] (line_chart): "visits" rows need a numeric "units"'],
+      ["a gauge value that is missing", gauge, { requested_units: undefined }, 'record[1] (gauge): "requested_units" is not a number'],
+      ["a gauge value that is not numeric", gauge, { requested_units: "1" }, 'record[1] (gauge): "requested_units" is not a number'],
+      ["a gauge max_field that is missing", limitGauge, {}, 'record[1] (gauge): "unit_limit" is not a number'],
+      ["a gauge max_field that is not numeric", limitGauge, { unit_limit: "2" }, 'record[1] (gauge): "unit_limit" is not a number'],
+      ["a gauge max of zero", { ...gauge, max: 0 }, {}, "record[1] (gauge): max must be greater than zero"],
+      ["a gauge max_field below zero", limitGauge, { unit_limit: -1 }, "record[1] (gauge): max must be greater than zero"],
+    ])("falls back whole on %s", (_case, chart, fields, reason) => {
+      const view = { view: "1.0.0", record: [header, chart], checks: { component: "timeline" }, decision_labels: labelled };
+      render(<RunPanel data={withView(view, { decision: "approved", record: { ...record, ...fields } })} pending={false} onDecide={vi.fn()} />);
       expect(screen.queryByTestId("declared-record")).toBeNull();
-      expect(technicalDetails().textContent).toContain("Declared view not rendered: record[1] (gauge): not rendered in this build");
+      expect(screen.queryByTestId("view-timeline")).toBeNull();
+      expect(screen.getByText(/fields shown/)).toBeTruthy();
+      expect(screen.getByText(/^Decision:/).textContent).toBe("Decision: approved");
+      const lines = Array.from(technicalDetails().querySelectorAll("*"))
+        .filter((n) => n.children.length === 0 && n.textContent?.startsWith("Declared view not rendered"));
+      expect(lines.map((n) => n.textContent)).toEqual([`Declared view not rendered: ${reason}`]);
     });
 
     it("falls back whole on a render-time exception", () => {
