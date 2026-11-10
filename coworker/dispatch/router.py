@@ -116,6 +116,22 @@ class CapabilityRouter:
         except httpx.RequestError as exc:
             raise FabricRefusal(f"fabric unreachable: {exc}", 0) from exc
 
+    def view(self, agent_id: str) -> Optional[dict]:
+        """The declared view read (view contract v1.0.0, fabric RFC 0055), fetched once.
+
+        Returns the view document when fabric answers `declared: true`, else None. An
+        unreachable fabric, a 404 from a fabric older than the read, and `declared: false` all
+        mean no view: presentation never blocks governed work, and nothing here is retried.
+        """
+        try:
+            answer = self._get(f"/api/agents/{agent_id}/view")
+        except Exception:
+            return None
+        if not isinstance(answer, dict) or answer.get("declared") is not True:
+            return None
+        document = answer.get("view")
+        return document if isinstance(document, dict) else None
+
     def _pursue(self, session_id: str, inputs: dict) -> Any:
         try:
             return self._post(f"/api/runs/{session_id}/pursue", {"inputs": inputs})
@@ -188,6 +204,7 @@ class CapabilityRouter:
                  for e in (chain.get("envelopes") or [])]
         gates = self._get(f"/api/runs/{run_id}/pending-signoff").get("gates") or []
         plan = {}
+        view = None
         if agent:
             try:
                 p = self._get(f"/api/agents/{agent}/plan")
@@ -199,10 +216,14 @@ class CapabilityRouter:
                                             if x.get("signoff")), None)}
             except Exception:
                 plan = {}
-        return {"framed": True, "agent": agent, "awaiting_signoff": bool(gates), "gates": gates,
-                "plan": plan, "steps": steps, "envelopes": len(steps),
-                "decision": (outcome or {}).get("decision") or (gates[-1]["state_after"] if gates else None),
-                "session_id": run_id}
+            view = self.view(agent)
+        result = {"framed": True, "agent": agent, "awaiting_signoff": bool(gates), "gates": gates,
+                  "plan": plan, "steps": steps, "envelopes": len(steps),
+                  "decision": (outcome or {}).get("decision") or (gates[-1]["state_after"] if gates else None),
+                  "session_id": run_id}
+        if view is not None:
+            result["view"] = view
+        return result
 
     def route(self, item: dict, on_step: Callable[[dict], None] | None = None,
               on_start: Callable[[str, str], None] | None = None) -> dict[str, Any]:
@@ -210,6 +231,7 @@ class CapabilityRouter:
         if card is None:
             return {"framed": False, "reason": "no agent's declared contract covers this item"}
         plan = self._get(f"/api/agents/{card['id']}/plan")
+        view = self.view(card["id"])
         start = self._post("/api/runs", {"agent_id": card["id"], "interactive_signoff": True})
         session_id = start["session_id"]
         if on_start is not None:
@@ -247,6 +269,8 @@ class CapabilityRouter:
             "steps": steps,
             "session_id": session_id,
         }
+        if view is not None:
+            result["view"] = view
         if self._learn:
             self.learn(item, result)
         return result
