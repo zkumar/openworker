@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -166,9 +167,18 @@ class _FakeRuns:
         return self._row
 
 
+class _FakeInbox:
+    def __init__(self, data):
+        self._item = SimpleNamespace(data=data)
+
+    def get(self, inbox_id):
+        return self._item
+
+
 class _FakeManager:
     def __init__(self, row):
         self.runs = _FakeRuns(row)
+        self.inbox = _FakeInbox({})       # OW-F-015: no declared view stored
 
 
 class _FakeActivities:
@@ -248,6 +258,56 @@ def test_an_anchorless_terminal_execute_refuses(dispatch, monkeypatch):
     final = d.evidence.chain_envelopes("humana.centerwell")[-1]
     assert final["outcome"] == "error"
     assert final["error_code"] == ANCHOR_UNAVAILABLE
+
+
+# --- OW-F-015: the run-completing envelope seals view_sha256 --------------------------------------
+
+# A declared view as stored on the work item, keys deliberately out of order, one non-ASCII char.
+STORED_VIEW = {"title": "Units ≤ limit", "components": [{"type": "gauge", "max": 1}]}
+# sha-256 of its canonical JSON (sorted keys, compact separators, UTF-8), computed by hand:
+#   printf '%s' '{"components":[{"max":1,"type":"gauge"}],"title":"Units ≤ limit"}' | shasum -a 256
+STORED_VIEW_SHA256 = "301d3dfdef1fdbf65d40ba20a62da5ff47ac9b8098eeb5bfa1c80ce2a2e4e80c"
+
+
+class _CompletingActivities(_FakeActivities):
+    """A work item whose execute stage reaches the terminal state (or the gate, if gated)."""
+
+    def __init__(self, stored: dict, gated: bool = False):
+        super().__init__()
+        self.manager.inbox = _FakeInbox(stored)
+        self.gated = gated
+
+    def execute_work_item(self, inbox_id):
+        return {"framed": True, "awaiting_signoff": self.gated,
+                "decision": None if self.gated else "approved",
+                "fabric_run": "run_fake", "agent": "payor_um"}
+
+
+@pytest.mark.parametrize("stage, extra", [("ow.execute_work_item", {}),
+                                          ("ow.sign_work_item", {"approver": "vijay"})])
+@pytest.mark.parametrize("stored, expected", [({"view": STORED_VIEW}, STORED_VIEW_SHA256),
+                                              ({}, None)])
+def test_the_run_completing_envelope_seals_view_sha256(tmp_path, monkeypatch, stage, extra,
+                                                       stored, expected):
+    """The hash of the stored declared view rides the envelope beside the fabric anchor;
+    null when no view was stored (adr-view-sha256-seals-declared)."""
+    monkeypatch.setattr(governed_module, "read_fabric_anchor",
+                        lambda run: {"session_id": run, "chain_head": HEAD})
+    d = GovernedDispatch(_CompletingActivities(stored), tmp_path)
+    out = d.run(stage, "itm-1", "humana.centerwell", **extra)
+    assert "view_sha256" in out and out["view_sha256"] == expected
+
+    final = d.evidence.chain_envelopes("humana.centerwell")[-1]
+    assert final["action"] == stage
+    assert final["result"]["view_sha256"] == expected, "sealed INSIDE the rfsdk envelope"
+    assert final["result"]["fabric_anchor"]["chain_head"] == HEAD
+
+
+def test_a_gated_execute_seals_no_view_sha256(tmp_path):
+    """Only the run-completing envelope carries the hash, like the fabric anchor."""
+    d = GovernedDispatch(_CompletingActivities({"view": STORED_VIEW}, gated=True), tmp_path)
+    out = d.run("ow.execute_work_item", "itm-1", "humana.centerwell")
+    assert "view_sha256" not in out and "fabric_anchor" not in out
 
 
 def test_caller_json_round_trips_for_approvals(db):

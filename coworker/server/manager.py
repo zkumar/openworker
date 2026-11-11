@@ -8063,6 +8063,10 @@ class SessionManager:
                      "awaiting_signoff": gated, "plan": result.get("plan"),
                      "capabilities": result.get("capabilities"),
                      "running": False, "steps": steps, "envelopes": len(steps)}
+        if result.get("view") is not None:
+            # OW-F-015: the declared view, fetched once by the router; the GUI renders only
+            # this stored copy. Harness-internal state, never a receipt field.
+            item.data["view"] = result["view"]
         ref = self._record_ref(item.data.get("record"))
         label = f"{item.data.get('channel', 'channel')}" + (f" · {ref}" if ref else "")
         item.title = (f"Sign off: {result.get('agent')} → {decided} · {ref}" if gated
