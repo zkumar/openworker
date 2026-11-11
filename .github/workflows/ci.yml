@@ -45,6 +45,12 @@ jobs:
       - name: Unit tests
         working-directory: surfaces/gui
         run: npm test
+      # The committed renderer app must match the shared components it is built from.
+      - name: Renderer app is current
+        working-directory: surfaces/gui
+        run: |
+          npm run build:views
+          git diff --exit-code -- ../views/
 
   gui-e2e:
     runs-on: ubuntu-latest
