@@ -1,12 +1,11 @@
-import { Component, useState, type ReactNode } from "react";
-
-import { checkView, DeclaredRecord, type ViewDoc } from "./DeclaredView";
+import {
+  Checks, decisionOf, declaredLabel, LABEL, RecordSection, SignedLine, signoffWording, toneOf, WholeView,
+  type Plan, type Signature, type Step, type ViewDoc,
+} from "../workItem";
 
 // One channel work item, written for the person who has to ACT on it.
 // Plain language first; hashes, the declared graph and the JSON payload are demoted to
 // "Technical details" so a QA/complaint reviewer never has to read a wire format.
-
-type Plan = { name?: string; signoff?: string; states?: string[]; gate_state?: string };
 
 export interface RunData {
   channel?: string;
@@ -23,42 +22,10 @@ export interface RunData {
   record?: Record<string, unknown>;
   fabric_run?: string;
   receipt?: Record<string, unknown>;
-  signature?: {
-    approver?: string; at?: string; state_before?: string; state_after?: string;
-    signoff?: string; sha256?: string;
-  };
-  steps?: {
-    type?: string; summary?: string; state_before?: string; state_after?: string;
-    sha256?: string; at?: string;
-  }[];
+  signature?: Signature;
+  steps?: Step[];
   // the declared view document stored on the work item at dispatch (view contract v1.0.0)
   view?: unknown;
-}
-
-const HIDDEN = new Set(["request_id", "capa_id", "slr_id"]);
-// never show a raw enum to a person
-const LABEL: Record<string, string> = {
-  not_found: "not found",
-  awaiting_signature: "awaiting signature",
-};
-const TONE: Record<string, string> = {
-  approved: "text-ok", closed: "text-ok", denied: "text-danger",
-  escalated: "text-warn", pended: "text-warn", revise: "text-warn",
-  not_found: "text-warn",
-};
-
-// "part11_single" is a CFR term; say what it means.
-const SIGN_LABEL: Record<string, string> = {
-  part11_single: "electronic signature (21 CFR Part 11)",
-};
-
-function Field({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0">
-      <div className="text-[11px] uppercase tracking-wide text-faint">{label.replace(/_/g, " ")}</div>
-      <div className="truncate text-[13px] text-ink" title={value}>{value}</div>
-    </div>
-  );
 }
 
 type PanelProps = {
@@ -67,57 +34,28 @@ type PanelProps = {
   onDecide: (decision: "once" | "deny") => void;
 };
 
-// A render-time exception inside the declared view falls the whole panel back to the generic
-// layout; a new stored view gets a fresh attempt.
-class ViewBoundary extends Component<
-  { view: unknown; fallback: ReactNode; children: ReactNode },
-  { failed: boolean; view: unknown }
-> {
-  state = { failed: false, view: this.props.view };
-
-  static getDerivedStateFromError() {
-    return { failed: true };
-  }
-
-  static getDerivedStateFromProps(props: { view: unknown }, state: { view: unknown }) {
-    return props.view !== state.view ? { failed: false, view: props.view } : null;
-  }
-
-  render() {
-    return this.state.failed ? this.props.fallback : this.props.children;
-  }
-}
-
-// The declared view applies whole or not at all: a structural failure, a mis-shaped binding or a
-// render-time exception renders the generic layout, with the reason in Technical details.
+// The declared view applies whole or not at all (the shared core's WholeView); the reason it
+// was not rendered goes to Technical details.
 export function RunPanel(props: PanelProps) {
-  if (props.data.view == null) return <Panel {...props} view={null} notRendered={null} />;
-  const checked = checkView(props.data.view, props.data.record ?? {});
-  if ("reason" in checked) return <Panel {...props} view={null} notRendered={checked.reason} />;
   return (
-    <ViewBoundary view={props.data.view} fallback={<Panel {...props} view={null} notRendered="render-time error" />}>
-      <Panel {...props} view={checked.view} notRendered={null} />
-    </ViewBoundary>
+    <WholeView
+      view={props.data.view}
+      record={props.data.record ?? {}}
+      render={(view, notRendered) => <Panel {...props} view={view} notRendered={notRendered} />}
+    />
   );
 }
 
 function Panel({
   data, pending, onDecide, view, notRendered,
 }: PanelProps & { view: ViewDoc | null; notRendered: string | null }) {
-  const [all, setAll] = useState(true);
-  const fields = Object.entries(data.record ?? {}).filter(([k]) => !HIDDEN.has(k));
-  const shown = all ? fields : fields.slice(0, 6);
   const steps = data.steps ?? [];
-  const decision = data.signature?.state_after ?? data.decision;
-  const tone = TONE[String(decision)] ?? "text-ink";
-  // decision_labels re-word the decision only; the tone stays keyed to the underlying state
-  const labels = view?.decision_labels;
-  const declaredLabel = labels && Object.prototype.hasOwnProperty.call(labels, String(decision)) ? labels[String(decision)] : undefined;
+  const decision = decisionOf(data);
+  const tone = toneOf(decision);
+  const label = declaredLabel(view, decision);
   // the last executed step usually explains WHY, in the pack's own words
   const reason = steps.length ? steps[steps.length - 1]?.summary : "";
-  // checks restyles the steps block; step text stays the verbatim chain summaries
-  const numbered = view?.checks?.numbered !== false;
-  const signLabel = SIGN_LABEL[String(data.plan?.signoff)] ?? (data.plan?.signoff || "sign-off");
+  const signLabel = signoffWording(data.plan);
 
   return (
     <section className="mb-3 rounded-xl border border-line bg-paper" data-testid="run-panel">
@@ -135,7 +73,7 @@ function Panel({
           </span>
         ) : (
           <span className={"text-[13px] font-semibold " + tone}>
-            {declaredLabel ?? LABEL[String(decision)] ?? decision}
+            {label ?? LABEL[String(decision)] ?? decision}
           </span>
         )}
       </header>
@@ -166,7 +104,7 @@ function Panel({
           ) : (
             <>
               <div className="text-[14px] font-semibold text-ink">
-                Decision: <span className={tone}>{declaredLabel ?? decision}</span>
+                Decision: <span className={tone}>{label ?? decision}</span>
               </div>
               {reason && <div className="mt-0.5 text-[13px] text-muted">{reason}</div>}
             </>
@@ -175,54 +113,10 @@ function Panel({
       )}
 
       {/* who it is about: the pack's declared layout, or the generic grid */}
-      {view?.record ? (
-        <DeclaredRecord view={view} record={data.record ?? {}} />
-      ) : (
-        <div className="border-t border-line px-4 py-3">
-          <div className="mb-2 flex items-center justify-between">
-            <h3 className="text-[12px] font-semibold uppercase tracking-wide text-muted">
-              Request <span className="normal-case text-faint">· {shown.length} of {fields.length} fields shown</span>
-            </h3>
-            {fields.length > 6 && (
-              <button className="text-[12px] text-accent hover:underline" onClick={() => setAll((v) => !v)}>
-                {all ? "Show fewer" : `Show all ${fields.length}`}
-              </button>
-            )}
-          </div>
-          <div className="grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-3">
-            {shown.map(([k, v]) => <Field key={k} label={k} value={String(v)} />)}
-          </div>
-        </div>
-      )}
+      <RecordSection view={view} record={data.record ?? {}} />
 
       {/* what was checked, in the pack's words */}
-      {steps.length > 0 && (
-        <div className="border-t border-line px-4 py-3">
-          <h3 className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-muted">
-            What was checked <span className="normal-case text-faint">· {steps.length} steps</span>
-          </h3>
-          {view?.checks?.component === "timeline" ? (
-            <ol className="ml-1.5 space-y-2 border-l border-line" data-testid="view-timeline">
-              {steps.map((s, i) => (
-                <li key={`${s.sha256}-${i}`} className="relative flex items-baseline gap-2 pl-4 text-ui">
-                  <span className="absolute -left-1 top-1.5 h-2 w-2 rounded-full bg-lineStrong" aria-hidden />
-                  {numbered && <span className="shrink-0 text-faint">{i + 1}</span>}
-                  <span className="min-w-0 text-muted">{s.summary ?? `${s.state_before} → ${s.state_after}`}</span>
-                </li>
-              ))}
-            </ol>
-          ) : (
-            <ol className="space-y-1">
-              {steps.map((s, i) => (
-                <li key={`${s.sha256}-${i}`} className="flex items-baseline gap-2 text-[13px]">
-                  {numbered && <span className="w-4 shrink-0 text-right text-faint">{i + 1}</span>}
-                  <span className="min-w-0 text-muted">{s.summary ?? `${s.state_before} → ${s.state_after}`}</span>
-                </li>
-              ))}
-            </ol>
-          )}
-        </div>
-      )}
+      <Checks view={view} steps={steps} />
 
       {/* the human gate, or the signature that closed it */}
       <footer className="flex flex-wrap items-center gap-3 border-t border-line px-4 py-3">
@@ -238,11 +132,7 @@ function Panel({
             <button className="btn" onClick={() => onDecide("deny")}>Decline</button>
           </>
         ) : data.signature ? (
-          <div className="text-[13px] text-muted">
-            <span className="font-medium text-ok">✓ Signed</span> by{" "}
-            <strong className="text-ink">{data.signature.approver}</strong>
-            {data.signature.at ? ` on ${data.signature.at}` : ""} · {steps.length} steps sealed
-          </div>
+          <SignedLine signature={data.signature} steps={steps.length} />
         ) : null}
       </footer>
 

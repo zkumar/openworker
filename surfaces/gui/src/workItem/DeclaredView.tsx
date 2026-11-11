@@ -1,14 +1,14 @@
 // The agent-declared view (view contract v1.0.0, fabric CONTRACTS.md §13): the pack declares
 // how a work item's record is laid out, against a closed vocabulary this file draws. Every label
 // and value renders as plain text. The gate, the decision tone, the running and error states and
-// Technical details are harness-reserved and live in RunPanel, never here.
+// Technical details are harness-reserved and live in the shared core and its surfaces, never here.
 
 import { useState, type CSSProperties, type ReactNode } from "react";
 
 type Rec = Record<string, unknown>;
 
 // harness hygiene ids stay hidden in the Other fields group, as in the generic layout
-const HIDDEN = new Set(["request_id", "capa_id", "slr_id"]);
+export const HIDDEN = new Set(["request_id", "capa_id", "slr_id"]);
 
 export type ViewComponent = { component: string } & Rec;
 export type ViewDoc = {
