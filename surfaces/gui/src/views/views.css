@@ -1,0 +1,14 @@
+/* The renderer app's styles: the GUI design tokens and the utility classes, nothing loaded from
+   anywhere (the host's frame has no network). Text falls back to system fonts. */
+@import "../tokens.css";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  color: var(--ink);
+  background: var(--panel);
+  -webkit-font-smoothing: antialiased;
+}
