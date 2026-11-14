@@ -54,7 +54,7 @@ export function declaredLabel(view: ViewDoc | null, decision: string | undefined
 }
 
 // the gate's sign-off wording, from the plan's signoff kind
-export function signoffWording(plan: Plan | undefined): string {
+export function signoffWording(plan: { signoff?: string } | undefined): string {
   return SIGN_LABEL[String(plan?.signoff)] ?? (plan?.signoff || "sign-off");
 }
 
