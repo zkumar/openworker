@@ -1,10 +1,15 @@
-// Answer bundles for the renderer app's tests, in the shape the cited fabric view-bound tool
-// answers (OW-F-016 Decisions): the payor demo work item from the gallery (synthetic, OW-F-015
-// ticket 05) as a bundle, the same item with no view, and with an invalid view.
+// Answer bundles for the renderer app's tests, in the shape of fabric's work-item bundle v1.0.0
+// (CONTRACTS.md §14): the payor demo work item from the gallery (synthetic, OW-F-015 ticket 05)
+// as a bundle, the same item with no view, and with an invalid view.
 import { payorDemoView, workItemStates } from "../gallery/states/work-item";
 import type { ToolResult } from "./host";
 
 const demo = workItemStates.find((s) => s.id === "payor-demo")!.payload as Record<string, unknown>;
+const demoPlan = demo.plan as { states: string[] } & Record<string, unknown>;
+const demoSteps = demo.steps as unknown[];
+
+// the demo graph's outcome states
+const TERMINAL = new Set(["approved", "denied", "pended"]);
 
 export const payorBundle = {
   session_id: "run-payor-demo",
@@ -12,12 +17,12 @@ export const payorBundle = {
   decision: demo.decision,
   final_state: "approved",
   awaiting_signoff: true,
-  envelopes: demo.envelopes,
+  envelopes: demoSteps,
   verified: true,
-  plan: demo.plan,
+  plan: { ...demoPlan, states: demoPlan.states.map((name) => ({ name, terminal: TERMINAL.has(name) })) },
   record: demo.record,
   signature: null,
-  steps: demo.steps,
+  steps: demoSteps.length,
   view: payorDemoView,
 };
 
