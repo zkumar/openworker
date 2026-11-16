@@ -9,12 +9,15 @@ import type { Host, ToolResult } from "./host";
 
 type Rec = Record<string, unknown>;
 
+// the bundle's plan (fabric CONTRACTS.md §14): states are objects, not the sidecar's strings
+type BundlePlan = Omit<Plan, "states"> & { states?: { name: string; terminal: boolean }[] };
+
 // the answer bundle's read-path fields the renderer draws (fabric owns the names)
 type WorkItem = {
   agent?: string;
   decision?: string;
   awaiting_signoff: boolean;
-  plan?: Plan;
+  plan?: BundlePlan;
   signature?: Signature;
   record: Rec;
   steps: Step[];
@@ -28,17 +31,23 @@ function isObj(v: unknown): v is Rec {
 
 const str = (v: unknown) => (typeof v === "string" ? v : undefined);
 
-// The one ingestion point: the answer bundle's field names map to what the renderer draws here
-// and nowhere else.
+// a §14 signature in the shared core's names
+function signatureOf(sig: Rec): Signature {
+  return { approver: str(sig.signer), at: str(sig.signed_at), signoff: str(sig.signoff_type) };
+}
+
+// The one ingestion point: the answer bundle's field names (work-item bundle v1.0.0, fabric
+// CONTRACTS.md §14) map to what the renderer draws here and nowhere else. `envelopes` is the
+// per-step list; `steps` is only its count.
 function workItemOf(bundle: Rec): WorkItem {
   return {
     agent: str(bundle.agent_id),
     decision: str(bundle.decision),
     awaiting_signoff: bundle.awaiting_signoff === true,
-    plan: isObj(bundle.plan) ? (bundle.plan as Plan) : undefined,
-    signature: isObj(bundle.signature) ? (bundle.signature as Signature) : undefined,
+    plan: isObj(bundle.plan) ? (bundle.plan as BundlePlan) : undefined,
+    signature: isObj(bundle.signature) ? signatureOf(bundle.signature) : undefined,
     record: isObj(bundle.record) ? bundle.record : {},
-    steps: Array.isArray(bundle.steps) ? (bundle.steps as Step[]) : [],
+    steps: Array.isArray(bundle.envelopes) ? (bundle.envelopes as Step[]) : [],
     view: bundle.view,
     app_url: str(bundle.app_url),
   };

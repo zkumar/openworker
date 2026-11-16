@@ -67,6 +67,24 @@ describe("WorkItemView", () => {
     expect(container.innerHTML).toBe(expected);
   });
 
+  it("reads the step list from envelopes, not the steps count", () => {
+    render(<WorkItemView result={toolResult(noViewBundle)} host={host()} />);
+    const checks = screen.getByText(/^What was checked/).closest("div")!;
+    expect(checks.querySelector("h3")!.textContent).toBe("What was checked · 9 steps");
+    expect(checks.querySelectorAll("li")).toHaveLength(9);
+  });
+
+  it("no envelopes list draws no checks", () => {
+    const { envelopes: _omit, ...missing } = payorBundle;
+    for (const bundle of [missing, { ...payorBundle, envelopes: 9 }]) {
+      render(<WorkItemView result={toolResult(bundle)} host={host()} />);
+      expect(screen.getByTestId("work-item-view")).toBeTruthy();
+      expect(screen.queryByText(/What was checked/)).toBeNull();
+      expect(screen.queryByTestId("view-timeline")).toBeNull();
+      cleanup();
+    }
+  });
+
   it.each<[string, ToolResult]>([
     ["text that is not JSON", { content: [{ type: "text", text: "Work item PA-2026-001: approved" }] }],
     ["JSON that is not an object", { content: [{ type: "text", text: "[1, 2]" }] }],
@@ -81,8 +99,7 @@ describe("WorkItemView", () => {
 
   describe("gate footer is read-only state", () => {
     const signature = {
-      approver: "Dr. Reviewer", at: "2026-11-10T10:00:00Z", state_before: "approved", state_after: "approved",
-      signoff: "part11_single", sha256: "e".repeat(64),
+      signer: "Dr. Reviewer", signoff_type: "part11_single", signed_at: "2026-11-10T10:00:00Z",
     };
 
     function footer() {
