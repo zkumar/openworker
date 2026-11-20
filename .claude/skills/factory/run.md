@@ -4,6 +4,13 @@ Covers `quick`, `import`, `run`, `next`, `approve` and `rework`. You orchestrate
 agents do the work. Formats are in [templates.md](templates.md), limits and
 policy in `factory/config.md`.
 
+
+**Runner or root.** Most of this file runs in a runner (see **Root and runner**
+in SKILL.md), which can't talk to the user. Where a step says to show, paste,
+ask, offer, open `show.sh` or wait for a reply, a runner instead leaves the
+files and `job.json` as that step describes, stops, and puts it in its
+hand-back; the root presents it. Steps marked **root** run only in the root.
+
 ## Names and paths
 
 - `<repo>`: the main checkout, `git rev-parse --show-toplevel`. `<name>`: its folder name.
@@ -31,7 +38,8 @@ by agent and step: `spec-writer`, `visualizer-plan`, `impl-t01`, `merger-t02`,
 `review-r1-code`, `fixer-r1`, `visualizer-as-built`, `approver`, and so on (sum
 repeats under the same key). Keep `tokens_total` as the sum. If a result carries
 no count, record `null` for that key rather than guessing. This is how
-`/factory retro` and the dashboard show where tokens go.
+`/factory retro` and the dashboard show where tokens go. The ledger counts the
+agents a runner launches, not the runner's own orchestration.
 
 **Superseding outcome files.** Before spawning the approver, and before a
 rework, rename any existing `decision.md` to `decision-<k>.md`, `pr.md` to
@@ -78,11 +86,16 @@ When `spec.md` is written, set `title` from its first heading and fill
    `tickets`.
 4. Spawn `visualizer` with `Job folder: <repo>/factory/jobs/<job-id>/. Mode: plan.`
    and wait for it.
-5. Set `stage: "ready"`. If `quick_spec_gate` is true, hold a spec gate: follow
+5. Set `stage: "ready"`. If `quick_spec_gate` is true, hold a spec gate (a
+   runner stops here and hands back; the root holds the gate): follow
    **Showing visuals at a decision point** in [visuals.md](visuals.md) (paste
    `visuals/chat.md`, run `./factory/show.sh <job-id>`), give the title, story
    and criteria counts and the ticket graph, and stop until the user replies
-   `approve` (then run) or asks for changes. Otherwise continue with
+   `approve` (then run) or asks for changes. List every line under the spec's **Assumptions** that is marked
+   **[product]**, each as a yes/no the user can see. On approval, change each
+   of those marks in `spec.md` to `**[product, confirmed <YYYY-MM-DD>]**`: the
+   user approved them by approving the spec, so the approver won't escalate
+   them again. An assumption the user changes is rewritten in the spec first. Otherwise continue with
    **/factory run**.
 
 ## /factory characterize <area>
@@ -131,7 +144,11 @@ feature) does today, with no product change. See `characterizer.md`.
    [visuals.md](visuals.md) first (paste `visuals/chat.md`, run
    `./factory/show.sh <job-id>`), then show the title, story and criteria
    counts, the ticket graph, and every line under **Assumptions**. On approval
-   set `stage: "ready"` and offer to run.
+   set `stage: "ready"` and offer to run. List every line under the spec's **Assumptions** that is marked
+   **[product]**, each as a yes/no the user can see. On approval, change each
+   of those marks in `spec.md` to `**[product, confirmed <YYYY-MM-DD>]**`: the
+   user approved them by approving the spec, so the approver won't escalate
+   them again. An assumption the user changes is rewritten in the spec first.
 
 ---
 
@@ -179,7 +196,7 @@ with a `# Glossary` heading if missing) and copy each `domain/adr-<slug>.md` to
 `docs/adr/adr-<slug>.md` (slugs, not numbers, so parallel jobs never collide).
 Then `git add` exactly those paths and commit `Record domain decisions for <job-id>`.
 
-Set `worktree`, `stage: "build"`.
+Set `worktree`, `stage: "build"`, `review_start_round: 1`.
 
 ### 2. Ticket loop
 
@@ -218,17 +235,39 @@ Loop:
 
 ### 3. Review round N
 
-1. Set `stage: "review"`, `round: N`, every `on` lens `pending`, every `off`
-   lens `skipped`. Create `round-<N>/`. For `mode: "characterize"` jobs only
-   `spec`, `code` and (if on) `compliance` count as `on`; every other lens is
-   `skipped`.
-2. Spawn every `on` reviewer **in the background, all at once**:
+1. Set `stage: "review"`, `round: N`, every lens that reviews this round
+   `pending`, every `off` lens `skipped`. Create `round-<N>/`. For
+   `mode: "characterize"` jobs only `spec`, `code` and (if on) `compliance`
+   count as `on`; every other lens is `skipped`.
+
+   Record `round_heads[N]` = `git -C "<worktree>" rev-parse HEAD` now, and
+   start `carried` empty for this round.
+
+   **Which lenses review.** The first review of a run or of a rework (round N
+   equals `review_start_round` in `job.json`, which **run** sets to 1 when it
+   starts and a rework sets as above), and every round of a `characterize` job:
+   every `on` lens. Later rounds with config `rereview: all`: every `on` lens. With
+   `rereview: changed` (the default), only:
+   - every lens whose latest verdict is `CHANGES`;
+   - `code`, always: it runs the full checks on the fixed branch;
+   - `compliance`, always, when it is on;
+   - `security`, if the fix diff (`git diff <round_heads[N-1]>..HEAD` in the
+     worktree) touches
+     authentication, permissions, input parsing, secrets, crypto, network calls,
+     or any dependency, lock, CI or deploy file;
+   - `ux` and `ui`, if that diff touches templates, components, pages, styles
+     or user-facing text.
+   Every other `on` lens keeps its latest `PASS`: write `PASS` in `reviews`,
+   add it to `carried` (this round's list, rewritten every round) with the round
+   its file is from, and to `round_carried[N]`, and write no new file for it. List the lenses you carried, and why, in one line of the
+   round report.
+2. Spawn every reviewing lens's reviewer **in the background, all at once**:
    `reviewer-<lens>` with `<paths for the job worktree> Review round N.`, plus
    ` Port: <port>.` for `ux` and `ui`. If config `serial_browser_lenses` is
    true, start `ui` only after `ux` has finished.
 3. **Wait for all.** As each finishes, read the first line of its file and write
    the verdict to `job.json` at once, so the dashboard fills in. The round is
-   done only when every `on` lens has its `review-<lens>.md`. Never start fixes
+   done only when every lens reviewing this round has its `review-<lens>.md`. Never start fixes
    mid-round. If a reviewer ends without its file, or its first line is not a
    verdict, give it one correction (see **One correction** in SKILL.md); if it
    still fails, stop and tell the user.
@@ -274,7 +313,10 @@ config **Visuals**, first spawn `visualizer` with
 `decision.md` (missing or not `APPROVE`/`ESCALATE`: one correction, then stop
 and tell the user):
 
-- `APPROVE` and `auto_merge: true`: go to **Deliver**.
+- `APPROVE` and `auto_merge: true`: go to **Deliver**, unless config
+  `delivery_control` is `root` (the default) and you are a runner: then set
+  `stage: "needs-human"`, `awaiting: "delivery"`, and hand back; the root's
+  `/factory approve` delivers.
 - `APPROVE` and `auto_merge: false`: go to **Needs human**; say the agent approved
   and human sign-off is required by policy.
 - `ESCALATE`: go to **Needs human**.
@@ -301,7 +343,7 @@ git worktree remove "<worktree>"
 git branch -d factory/<job-id>
 ```
 
-Set `stage: "merged"`, and show the user what landed: the **Solution** block of
+Set `stage: "merged"`, and (root, or in the hand-back's outcome line) show what landed: the **Solution** block of
 `visuals/as-built/chat.md` (if it exists) and one line per drift. If the merge
 fails, `git merge --abort`, set `needs-human`, and say why. If removing the worktree fails (for example untracked
 build output), the job is still merged; report what git printed. **Never push.**
@@ -348,7 +390,9 @@ so a resumed Deliver just runs it again.
 
 ### Needs human
 
-Set `stage: "needs-human"`. Leave every branch and worktree in place. (In PR mode
+Set `stage: "needs-human"`, and clear `awaiting` unless this is the
+delivery hold from **Approve**. Leave every branch and worktree in place. A
+runner stops here and hands back; the root does steps 1-3 below. (In PR mode
 the branch may already have an open PR from an earlier delivery; say so and give
 `pr_url`.) Show the user what they are deciding on, in this order:
 
@@ -380,8 +424,14 @@ and the files on disk:
 - `review`: spawn only the `on` lenses (for characterize jobs: spec, code and,
   if on, compliance) missing a `round-<round>/review-<lens>.md`.
 - `approve`: if `decision.md` exists and starts with `APPROVE`, the approver
-  finished: continue from the `APPROVE` branch of **Approve** (Deliver is safe to
-  repeat). Otherwise re-run **Approve**.
+  finished: continue from the `APPROVE` branch of **Approve**, including its
+  `delivery_control` check (a runner never delivers under `root`; Deliver is safe
+  to repeat in the root). Otherwise re-run **Approve**.
+- A runner that died before handing back (no progress on the dashboard, no
+  hand-back): run the same command again. `run` resumes as above; `quick`,
+  `characterize` and `next` whose job folder already exists resume with
+  `/factory run <job-id>` once the job is `ready`, or are re-run from scratch
+  if `spec.md` is missing.
 - `pr-open` / `merged`: nothing to resume; use `/factory status`.
 
 ---
@@ -452,8 +502,8 @@ The job must be `needs-human`, `decision.md` must exist, and no ticket may be
 `blocked`. Otherwise say why it can't be signed off: for a `pr-open` job, say it
 is already delivered and its PR is approved on GitHub; for the rest suggest
 `rework`.
-Write `approval.md` (template in [templates.md](templates.md)) using
-`git config user.name` and `git config user.email`, then run **Deliver**: a local
+Runs in the root. Write `approval.md` (template in [templates.md](templates.md)) using
+`git config user.name` and `git config user.email`, clear `awaiting`, then run **Deliver**: a local
 merge, or in PR mode a pushed branch and an open PR whose body carries the
 sign-off.
 
@@ -462,7 +512,8 @@ sign-off.
 The job must be `needs-human`, or `pr-open` (PR mode: the team asked for changes
 on the PR).
 
-0. Clear `ci` in `job.json` (any earlier CI result belongs to the old commit).
+0. Clear `ci` and `awaiting` in `job.json` (any earlier CI result or delivery
+   hold belongs to the old commit).
    Make sure the job worktree is present (see **Worktree present?**); in PR mode
    that also pulls in commits others pushed to the PR. With `--from-pr` (PR mode,
    a real PR in `pr_url`), the note is the PR's feedback:
@@ -487,6 +538,13 @@ on the PR).
    comment at 2,000 characters, each failing check's log at its last 200 lines,
    the whole block at 30,000 characters, cutting with `[…truncated]`. Read only
    that much yourself, too.
+Steps 0 and 1 run in the root when you typed the rework (it has your note);
+then it hands off `rework <job-id>` to a runner. When `/factory watch` reworks
+(CI repair, or `pr_feedback: auto`), the runner does steps 0 and 1 itself. Either
+way the runner starts step 2 with the newest `rework-<k>.md` that has no
+`build/rework-<k>.md` yet, and sets `review_start_round` to the round the
+rework's first review will be.
+
 2. Set `stage: "build"`. Spawn a fresh `implementer` named `fixer-<job-id>-r<k>`
    with
    `<paths for the job worktree> Rework: read rework-<k>.md and address it, then write build/rework-<k>.md. Port: <port base + 8>.`

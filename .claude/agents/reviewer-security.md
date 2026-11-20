@@ -22,7 +22,7 @@ absolute paths. Never change anything in the main checkout except your one file.
 2. `<job folder>/spec.md`.
 3. `git log --oneline <base>..<branch>`, `git diff <base>...<branch>`, and every
    changed file in full. Follow data into the code it reaches.
-4. From round 2: your own `round-<N-1>/review-security.md`. Check each finding was fixed.
+4. From round 2: your own latest earlier review, the highest `round-<M>/review-security.md` with M < N. Check each finding was fixed.
 
 ## Look for
 

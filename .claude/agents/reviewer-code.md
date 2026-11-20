@@ -23,7 +23,7 @@ absolute paths. Never change anything in the main checkout except your one file.
 2. `<job folder>/spec.md` (for intent only; the spec lens checks conformance).
 3. The change: `git log --oneline <base>..<branch>` and `git diff <base>...<branch>`.
    Read changed files in full where the diff isn't enough.
-4. From round 2: your own `round-<N-1>/review-code.md`. Check each finding was fixed.
+4. From round 2: your own latest earlier review, the highest `round-<M>/review-code.md` with M < N. Check each finding was fixed.
 
 ## Run the checks
 

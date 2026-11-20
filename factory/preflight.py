@@ -9,6 +9,7 @@ so the orchestrator stops before spending tokens. Standard library only.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -104,6 +105,12 @@ def check_config() -> dict:
             bad = True
     if not any(s == "on" for s in lenses.values()):
         fail("config Review lenses: every lens is off, so nothing would review the work")
+        bad = True
+    if limits.get("rereview", "changed") not in ("changed", "all"):
+        fail(f"config Limits: rereview must be changed or all (got {limits.get('rereview')!r})")
+        bad = True
+    if policy.get("delivery_control", "root") not in ("root", "runner"):
+        fail(f"config Merge policy: delivery_control must be root or runner (got {policy.get('delivery_control')!r})")
         bad = True
     mode = policy.get("merge_mode", "local")
     if mode not in ("local", "pr"):
@@ -267,6 +274,10 @@ def check_git(cfg: dict) -> None:
         ok(f"factory files committed on {ref}")
     if lenses.get("compliance") == "on" and git("cat-file", "-e", f"{ref}:COMPLIANCE.md").returncode != 0:
         fail(f"compliance lens is on but COMPLIANCE.md is not committed on {ref}")
+    depth = os.environ.get("CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH")
+    if depth is not None and depth.strip() == "1":
+        warn("CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1: agents can't launch agents here, so jobs run in the "
+             "root conversation instead of a runner (no fresh context per job)")
     if not (ROOT / "AGENTS.md").exists() and not (ROOT / "CLAUDE.md").exists():
         warn("no AGENTS.md or CLAUDE.md: agents won't know how to set up, test or build (run /factory setup)")
 

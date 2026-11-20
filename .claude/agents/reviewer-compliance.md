@@ -25,7 +25,7 @@ absolute paths. Never change anything in the main checkout except your one file.
    the compliance lens is on but has no checklist", and stop.
 2. `AGENTS.md` (or `CLAUDE.md`), `<job folder>/spec.md`, `tickets/`, `build/`.
 3. `git log --oneline <base>..<branch>` and `git diff <base>...<branch>`.
-4. From round 2: your own `round-<N-1>/review-compliance.md`.
+4. From round 2: your own latest earlier review, the highest `round-<M>/review-compliance.md` with M < N.
 
 ## Check
 

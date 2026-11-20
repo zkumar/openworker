@@ -114,10 +114,16 @@ point** in [visuals.md](visuals.md), pasting `visuals/chat.md` into the chat and
 opening the job's Visual view with `./factory/show.sh <job-id>`. Then give a
 five-line summary: title, story count, criteria count, ticket graph
 (`01 → 02, 03`), open assumptions. Ask: reply `approve`, or say what to change.
+List every line under the spec's **Assumptions** that is marked
+**[product]**, each as a yes/no the user can see. On approval, change each
+of those marks in `spec.md` to `**[product, confirmed <YYYY-MM-DD>]**`: the
+user approved them by approving the spec, so the approver won't escalate
+them again. An assumption the user changes is rewritten in the spec first.
 Feedback on a picture is feedback on the spec: fix the spec or tickets, re-run
 the visualizer, and show the new pictures the same way.
 
-- Approved: set `title` from the spec's heading and `stage: "ready"`. Offer `/factory run <job-id>` now, or tell
+- Approved: set `title` from the spec's heading and `stage: "ready"`. Offer `/factory run <job-id>` now (it hands off to a runner, as in **Root
+  and runner** in SKILL.md), or tell
   them any session in this repo can run it later.
 - Not approved: return to whichever step their feedback reopens.
 

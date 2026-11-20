@@ -42,11 +42,15 @@ APPROVE only if all of these hold:
 
 - Every acceptance criterion is met with convincing evidence. Re-run the verify
   step of at least two criteria yourself, choosing the riskiest.
-- Every lens that ran in round N says `VERDICT: PASS`, and no Note in any review
+- Every lens's latest review says `VERDICT: PASS` (a lens listed in `carried`
+  in `job.json` didn't re-run in round N: its latest file is from an earlier
+  round, and that is expected), and no Note in any review
   describes a real problem.
 - `git merge-tree --write-tree <base> <branch>` reports no conflicts.
 - No line of the merge policy applies to the change.
-- No **[product]** assumption in the spec is still unconfirmed.
+- No **[product]** assumption in the spec is still unconfirmed. One marked
+  `**[product, confirmed <date>]**` was approved by a person at the spec gate:
+  it is confirmed, and is no reason to escalate.
 - `drift.md` (if present) shows no `UNEXPLAINED` drift on a **risk** node.
 
 Otherwise ESCALATE. Name every policy line that applies.

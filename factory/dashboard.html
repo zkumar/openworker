@@ -154,6 +154,7 @@
     header, .flow { padding-left: 16px; padding-right: 16px; }
     .board { grid-template-columns: 1fr; padding: 8px 16px 24px; }
   }
+  .chip.carried { opacity: .55; border-style: dashed; }
 </style>
 </head>
 <body>
@@ -237,21 +238,23 @@ async function pastRounds(job) {
     const lenses = Object.keys(job.reviews || {});
     const vals = await Promise.all(lenses.map(async (l) => {
       if ((job.reviews || {})[l] === "skipped") return "skipped";
+      if (((job.round_carried || {})[n] || []).includes(l)) return "carried";
       const fl = await firstLine(`jobs/${job.id}/round-${n}/review-${l}.md`);
       const m = fl && fl.match(VERDICT_RE);
       return fl === null ? "missing" : m ? m[1] : "invalid";
     }));
     const v = Object.fromEntries(lenses.map((l, i) => [l, vals[i]]));
-    if (Object.values(v).every((x) => x === "PASS" || x === "CHANGES" || x === "skipped")) roundCache.set(key, v);
+    if (Object.values(v).every((x) => ["PASS", "CHANGES", "skipped", "carried"].includes(x))) roundCache.set(key, v);
     rows.push([n, v]);
   }
   return rows;
 }
 
-function chip(lens, val, live) {
+function chip(lens, val, live, carried) {
+  if (val === "carried") { val = "PASS"; carried = true; }
   const known = ["PASS", "CHANGES", "pending", "skipped"].includes(val);
-  const cls = known ? val : "bad";
-  const title = `${lens}: ${val}`;
+  const cls = (known ? val : "bad") + (carried ? " carried" : "");
+  const title = `${lens}: ${val}${carried ? " (carried from an earlier round, not re-reviewed)" : ""}`;
   return `<span class="chip ${cls}${live && val === "pending" ? " live" : ""}" title="${esc(title)}">${esc(lens)}${known ? "" : " ?"}</span>`;
 }
 
@@ -280,9 +283,11 @@ function cardHtml(job, past) {
     for (const [n, v] of past) {
       h += `<div class="round"><span class="r">R${n}</span>${Object.entries(v).map(([l, x]) => chip(l, x, false)).join("")}</div>`;
     }
-    h += `<div class="round"><span class="r">R${job.round}</span>${Object.entries(job.reviews || {}).map(([l, x]) => chip(l, x, job.stage === "review")).join("")}</div>`;
+    h += `<div class="round"><span class="r">R${job.round}</span>${Object.entries(job.reviews || {}).map(([l, x]) => chip(l, x, job.stage === "review", (job.carried || {})[l] !== undefined)).join("")}</div>`;
   }
-  if (job.stage === "needs-human") {
+  if (job.stage === "needs-human" && job.awaiting === "delivery") {
+    h += `<div class="hint">approved; deliver: <code>/factory approve ${esc(job.id)}</code></div>`;
+  } else if (job.stage === "needs-human") {
     h += `<div class="hint">your call: <code>/factory approve ${esc(job.id)}</code> or <code>/factory rework ${esc(job.id)} …</code></div>`;
   }
   if (job.pr_url && /^https?:\/\//.test(job.pr_url)) {

@@ -31,7 +31,7 @@ LEARN: /factory retro turns recurring findings into checks, standards and policy
 | `/factory shape <idea>` | Grill the user, record domain decisions, agree seams, write spec and tickets, stop at the spec gate | [shape.md](shape.md) |
 | `/factory quick <feature>` | `spec-writer` writes spec and one or more tickets with no interview, then run | [run.md](run.md) |
 | `/factory import <path or issue>` | `spec-writer` converts an existing spec (for example from `/to-spec`) into this format, then the spec gate | [run.md](run.md) |
-| `/factory run <job-id>` | Build, review, approve, merge a job whose stage is `ready` | [run.md](run.md) |
+| `/factory run <job-id>` | Hand a `ready` job to a runner: build, review, approve; delivery waits for you by default | [run.md](run.md) |
 | `/factory show <job-id>` | Paste the job's pictures into the chat and open its Visual view, at any stage | [run.md](run.md) |
 | `/factory watch <job-id>` | PR mode: wait for CI, repair failing checks (up to `ci_repairs`), bring new review comments back; never merges | [run.md](run.md) |
 | `/factory next` | Take the first unchecked item in `factory/backlog.md` and run it as `quick` | [run.md](run.md) |
@@ -40,12 +40,58 @@ LEARN: /factory retro turns recurring findings into checks, standards and policy
 | `/factory retro [job-id or all]` | Propose environment improvements from review history | [retro.md](retro.md) |
 | `/factory status` | Print a table of every job: id, stage, round, tickets done/total, verdicts | (below) |
 
+## Root and runner
+
+This conversation is the **root**: it holds every decision. Job work runs in a
+**runner**, the `factory-run` skill, which forks a fresh context per job (it
+never sees this conversation) and launches the builders and reviewers itself.
+Its many small steps stay in its own short context instead of this one.
+
+| In the root (this conversation) | Handed to a runner |
+| --- | --- |
+| `setup`, `onboard`, `shape`, `import`, `show`, `status`, `retro`, `approve` (it delivers), `rework` steps 0-1 (writing the note) | `run`, `next`, `quick`, `watch`, `characterize`, `rework` from step 2 |
+
+**Hand-off.** Only these go to a runner: `run`, `next`, `quick`, `watch`,
+`characterize`, and `rework` after you've written the note. Never hand off
+`approve` (you sign off and deliver it here), `shape`, `setup`, `onboard`,
+`import`, `show`, `status` or `retro`. For a runner command, invoke the `factory-run` skill with the
+command and its argument as arguments (`run 004-csv-export`, `quick <feature>`,
+`rework 004-csv-export`) and say in one line that it is running and the
+dashboard shows progress. Do nothing else for that job until its hand-back
+arrives; don't poll it. Several runners may run at once, one per job.
+
+**Hand-back.** A runner ends with four lines: job, stage and outcome, what it
+is waiting for, the next command, tokens. Then, in the root:
+- waiting for nothing (merged, PR open): relay the outcome in one line;
+- waiting for a person (`needs-human`, or `ready` at a spec gate): follow
+  **Showing visuals at a decision point** in [visuals.md](visuals.md), quote the
+  reason from `decision.md` (or the blocked build files), and give the replies
+  that work. For a characterize job, paste its `captures.md` table instead of
+  pictures. `awaiting: "delivery"` means the approver approved and delivery
+  waits for you: `/factory approve <job-id>` delivers.
+
+**Root-side delivery** runs one job at a time: finish one `/factory approve`
+(merge or push) before starting the next, since local merges share your main
+checkout. Runners never touch the main checkout's branches.
+
+`quick <feature>`, `characterize <area>` and `next` have no job id until the
+runner creates the job; it appears on the dashboard then, and the hand-back's
+first line carries the new id. If a runner never hands back, see **Resuming**
+in run.md.
+
+If the `factory-run` skill can't fork (an older Claude Code), it runs in this
+conversation instead and behaves the same, just without the fresh context. If a
+runner hands back `runner can't launch agents here` (nesting is switched off),
+run that command yourself in this conversation, as the playbook describes, and
+tell the user once that this environment can't use runners. Never work around it
+by starting `claude -p` processes.
+
 Read the playbook for the command before acting. Read [templates.md](templates.md) whenever you write or check a factory file. Read `factory/config.md` at the start of every command: it sets the lenses, limits, ports and merge policy.
 
 ## Your role
 
 - **During shape** you are the interviewer and the spec author, because only this session holds the conversation. You still never write product code.
-- **During run** you are the orchestrator only. You spawn every agent, keep `job.json` current, and run the git plumbing that needs no judgement (worktrees, clean merges, cleanup). You never write code, reviews or decisions. Agents do the work and each writes only its own files.
+- **During run** you (the runner) are the orchestrator only. You spawn every agent, keep `job.json` current, and run the git plumbing that needs no judgement (worktrees, clean merges, cleanup). You never write code, reviews or decisions. Agents do the work and each writes only its own files.
 
 ## Rules every command follows
 
