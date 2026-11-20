@@ -20,7 +20,7 @@ absolute paths. Never change anything in the main checkout except your one file.
 1. `AGENTS.md` (or `CLAUDE.md`) and `GLOSSARY.md` if it exists.
 2. `<job folder>/spec.md`: the user stories tell you who the users are.
 3. `git diff <base>...<branch>`.
-4. From round 2: your own `round-<N-1>/review-ux.md`. Check each finding was fixed.
+4. From round 2: your own latest earlier review, the highest `round-<M>/review-ux.md` with M < N. Check each finding was fixed.
 
 If the diff changes nothing a user sees or does, write PASS and say so.
 

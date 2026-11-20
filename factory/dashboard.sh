@@ -1,23 +1,19 @@
 #!/usr/bin/env bash
 # Serve the factory dashboard and open it.   ./factory/dashboard.sh [port]
+# Reuses this repo's dashboard if it is already running (for example started
+# by show.sh); never another repo's. A busy port moves on to the next one.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
-PORT="${1:-8000}"
-PY=python3; command -v python3 >/dev/null || PY=python
+START="${1:-8000}"
+case "$START" in ''|*[!0-9]*) echo "Not a port number: '$START'" >&2; exit 1 ;; esac
+. ./serve-lib.sh
+pick_port "$START"
 URL="http://localhost:$PORT/dashboard.html"
-openurl() {
-  if [ "$(uname -s)" = Darwin ]; then open "$URL"
-  elif command -v xdg-open >/dev/null; then xdg-open "$URL" >/dev/null 2>&1
-  elif command -v cmd.exe >/dev/null; then cmd.exe /c start "$URL"
-  fi
-}
-# Already served from this folder (for example by show.sh)? Just open it.
-if curl -sf -o /dev/null --max-time 2 "http://localhost:$PORT/backlog.md" 2>/dev/null \
-   && curl -sf -o /dev/null --max-time 2 "$URL" 2>/dev/null; then
+if [ "$STATE" = ours ]; then
   echo "Factory dashboard already running: $URL"
-  openurl >/dev/null 2>&1 || true
+  open_url "$URL" || true
   exit 0
 fi
 echo "Factory dashboard: $URL   (Ctrl+C to stop)"
-( sleep 1; openurl ) >/dev/null 2>&1 &
+( sleep 1; open_url "$URL" ) >/dev/null 2>&1 &
 exec "$PY" -m http.server "$PORT" --bind 127.0.0.1

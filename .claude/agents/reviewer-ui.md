@@ -21,7 +21,7 @@ absolute paths. Never change anything in the main checkout except your one file.
 2. The styling system: theme or design-token config, global stylesheets, and the
    components next to the ones that changed.
 3. `<job folder>/spec.md` and `git diff <base>...<branch>`.
-4. From round 2: your own `round-<N-1>/review-ui.md`. Check each finding was fixed.
+4. From round 2: your own latest earlier review, the highest `round-<M>/review-ui.md` with M < N. Check each finding was fixed.
 
 If the diff changes nothing visible, write PASS and say so.
 

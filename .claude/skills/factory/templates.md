@@ -59,6 +59,14 @@ factory/jobs/<job-id>/
   agent's result carried no count.
 - `pr_url`: PR mode only, set when the PR is opened (or the compare link when `gh`
   is unavailable). Absent otherwise.
+- `review_start_round`, `round_heads`, `carried`, `round_carried`: review
+  bookkeeping. `review_start_round` is the first round of the current run or
+  rework (every lens reviews it); `round_heads` maps each round to the commit
+  it reviewed; `carried` maps a lens that didn't re-run this round to the round
+  its `PASS` is from (`{"spec": 1}`), rewritten every round; `round_carried`
+  lists, per round, the lenses carried in it (`{"2": ["spec", "ux"]}`).
+- `awaiting`: `"delivery"` when the approver approved but delivery waits for
+  the root (`delivery_control: root`); cleared by `/factory approve`.
 - `ci`, `ci_repairs_used`, `pr_feedback_seen`, `pushed_sha`: PR mode. `pushed_sha`
   is the commit Deliver last pushed. `/factory watch` sets `ci` (`pending`,
   `passed`, `failed` or `none`; cleared on rework), `ci_repairs_used` (automatic

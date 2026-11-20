@@ -40,7 +40,8 @@ Follow the spec template in templates.md exactly.
   repo's real validation commands. Ask for tests only where a test runner exists.
 - **Assumptions.** Anything a human hasn't confirmed. Mark product or business
   calls (copy, pricing, defaults users see, what is free or paid) with
-  **[product]**: the approver escalates those, so be honest rather than hopeful.
+  **[product]**: the person sees each at the spec gate and confirms it there;
+  if no gate is held, the approver escalates them. Be honest rather than hopeful.
 - Doc updates the change requires (AGENTS.md, docs it lists) are requirements.
 - **Existing behaviour.** When the request changes something the code already
   does, fill the spec's **Behaviour delta** (ADDED / MODIFIED / REMOVED, each
