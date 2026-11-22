@@ -10,19 +10,19 @@ agent: factory-runner
 Arguments: `$ARGUMENTS`
 
 The first word is the command (`run`, `next`, `quick`, `watch`,
-`characterize` or `rework`); the rest is its argument (a job id, a feature line or an
-area). You run that one command for one job, from start to the next point where
+`characterize`, `issue` or `rework`); the rest is its argument (a job id, a
+feature line, an area or an issue number). You run that one command for one job, from start to the next point where
 a person must decide, and then you stop.
 
-0. **Only those six commands.** Anything else (`approve`, `shape`, `setup`,
+0. **Only those seven commands.** Anything else (`approve`, `shape`, `setup`,
    `onboard`, `import`, `show`, `status`, `retro`, or no command) belongs to
    the root: change nothing and hand back at once with
    `<arguments> · not a runner command` / `Waiting for: the root to run it itself` /
    `Next: root runs /factory <arguments> in the conversation` / `Tokens: 0`.
 1. Read `.claude/skills/factory/SKILL.md`, `.claude/skills/factory/run.md` and
    `factory/config.md`, then follow the playbook section for the command:
-   **/factory run**, **/factory next**, **/factory quick**, **/factory watch** or
-   **/factory characterize**. Read `templates.md` and `visuals.md` when a step
+   **/factory run**, **/factory next**, **/factory quick**, **/factory watch**,
+   **/factory characterize**, or **Runner: issue <n>** (under **/factory queue**). Read `templates.md` and `visuals.md` when a step
    points to them.
 2. Everything you know comes from the repo and the job folder
    `factory/jobs/<job-id>/`. You don't see the conversation that started you; if

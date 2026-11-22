@@ -1,7 +1,10 @@
 # /factory retro [job-id or all]
 
 Look back over finished jobs and propose changes to the **environment** so the
-next jobs need fewer rounds and fewer escalations. You propose; the user decides.
+next jobs need fewer rounds and fewer escalations. You propose; the user decides. When `decision_brief: true` in
+`factory/config.md`, present the proposals as a brief from the
+`decision-brief` skill, one Decide row per proposal, so the user can answer
+by number.
 Change nothing until they say which proposals to apply.
 
 ## 1. Gather

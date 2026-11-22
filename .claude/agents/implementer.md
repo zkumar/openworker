@@ -85,7 +85,13 @@ and list it under `## Findings addressed` as
 - **Smallest change that meets the criteria.** No fallbacks, hidden defaults or
   extras. Stay inside your ticket's scope.
 - Run type-checks and the single test file often, and the full validation
-  commands from AGENTS.md once at the end. Lint only files you changed; never
+  commands from AGENTS.md once at the end. Before writing `STATUS: READY`, run
+  the factory's check gate from your worktree, `python3 factory/check.py .`
+  (in the background if the suite is slow; it can outlast a command's time limit);
+  the orchestrator runs the same gate before any reviewer, and a failure there
+  costs a whole fix round. Make it pass without weakening, skipping or
+  deleting tests or checks; if it fails for reasons outside your ticket, say so
+  in your build file. Lint only files you changed; never
   run a command that rewrites files across the repo.
 - For criteria visible on a page: start the dev server on your port in your
   worktree and check with the `agent-browser` CLI if it is installed, passing

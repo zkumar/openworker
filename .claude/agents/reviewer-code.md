@@ -27,9 +27,15 @@ absolute paths. Never change anything in the main checkout except your one file.
 
 ## Run the checks
 
-Run AGENTS.md's validation commands (tests, build, lint, type-check) for the
-areas touched. Lint only changed files; never use a mode that rewrites files.
-Report each under `## Checks`. A failing check is always CHANGES.
+The orchestrator ran the factory's check gate on this exact commit before
+starting you: `<job folder>/round-<N>/checks.md`. If it starts with
+`CHECKS: PASS`, don't re-run the commands it lists; copy its table under
+`## Checks`. Run only what it doesn't cover (for example a check AGENTS.md
+lists that the gate doesn't, or lint on just the changed files). If it says
+`CHECKS: NONE` or is missing, run AGENTS.md's validation commands (tests,
+build, lint, type-check) for the areas touched yourself. Never use a mode that
+rewrites files. Report each under `## Checks`. A failing check is always
+CHANGES.
 
 ## Review
 

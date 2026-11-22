@@ -21,6 +21,14 @@ Facts are your job, never the user's: when you need to know how something works
 in the code, dispatch an `Explore` subagent (model `sonnet`) with a narrow
 question rather than asking the user. Use the glossary's terms from now on.
 
+When `story_map: true` and `factory/story-map.json` exists, read it and name the
+story (or stories) the idea serves, and which of its red or orange parts and
+lenses it moves. Put that in round 1 as a question with your recommendation. An
+idea that fits no story is drift: say so in that question, and let the user add
+a story, pick one, or keep it as drift. Record the answer in the spec's
+**Context** as `Story: <number> <name>` (or `Story: none, drift accepted`), so
+the redraw after merge places the job without guessing.
+
 ## 3. Grill in rounds
 
 Map the idea as a **design tree**: every decision branches into the decisions
@@ -44,6 +52,13 @@ Redraw only when an answer changed the structure; otherwise say `picture
 unchanged`. When a question is a structural choice (where a check lives, sync
 or async, which part owns the data), draw each option as a small sketch labelled
 **A** and **B**, with your recommendation under them.
+
+When `decision_brief: true`, end each round with the `decision-brief` skill's
+count line and Decisions table over that round's questions (one row per `Q`,
+Suggested = your recommendation, Undo = hard for a one-way door), so the user
+can reply `yes to all` or by number. A question with 2-4 real options and
+competing criteria (a library, a vendor, an architecture) also gets the
+skill's weighted board, scored only from facts the Explore agents found.
 
 Wait for answers, recompute the frontier, ask the next round. A question that
 depends on another open question waits for a later round. While an Explore
@@ -92,14 +107,16 @@ yourself:
   how to verify it with only the repo.
 - Every seam is marked `confirmed by human`.
 - Nothing in **Assumptions** is a product call the user already answered.
+- The **Risk:** line follows the template's rule; ask the user if unsure.
 
 ## 7. Slice into tickets
 
 Draft tracer-bullet tickets (template in [templates.md](templates.md)). Show
 them as a numbered list: title, blocked by, what it delivers, which criteria.
 Ask: is the granularity right, are the blocking edges real, merge or split
-anything? Iterate until approved, then write `tickets/<NN>-<slug>.md` and set
-`job.json` `tickets` to every ticket `pending`.
+anything? Iterate until approved, then write `tickets/<NN>-<slug>.md` and run
+`python3 factory/job.py tickets <job-id>` (every ticket `pending`, plus title
+and risk from the spec).
 
 Wide mechanical refactors are the exception to vertical slicing: sequence them
 expand, migrate in batches, contract, each its own ticket.
@@ -112,8 +129,10 @@ First spawn `visualizer` with
 Lead with the pictures, not the text: follow **Showing visuals at a decision
 point** in [visuals.md](visuals.md), pasting `visuals/chat.md` into the chat and
 opening the job's Visual view with `./factory/show.sh <job-id>`. Then give a
-five-line summary: title, story count, criteria count, ticket graph
-(`01 → 02, 03`), open assumptions. Ask: reply `approve`, or say what to change.
+six-line summary: title, story count, criteria count, ticket graph
+(`01 → 02, 03`), the **Risk:** line, open assumptions (as a brief when
+`decision_brief: true`: the spec gate is Decide 1, each open assumption its own
+Decide row). Ask: reply `approve`, or say what to change.
 List every line under the spec's **Assumptions** that is marked
 **[product]**, each as a yes/no the user can see. On approval, change each
 of those marks in `spec.md` to `**[product, confirmed <YYYY-MM-DD>]**`: the
@@ -122,7 +141,8 @@ them again. An assumption the user changes is rewritten in the spec first.
 Feedback on a picture is feedback on the spec: fix the spec or tickets, re-run
 the visualizer, and show the new pictures the same way.
 
-- Approved: set `title` from the spec's heading and `stage: "ready"`. Offer `/factory run <job-id>` now (it hands off to a runner, as in **Root
+- Approved: run `job.py tickets <job-id>` again (title and risk from the
+  final spec), then `job.py stage <job-id> ready`. Offer `/factory run <job-id>` now (it hands off to a runner, as in **Root
   and runner** in SKILL.md), or tell
   them any session in this repo can run it later.
 - Not approved: return to whichever step their feedback reopens.

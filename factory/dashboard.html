@@ -155,6 +155,8 @@
     .board { grid-template-columns: 1fr; padding: 8px 16px 24px; }
   }
   .chip.carried { opacity: .55; border-style: dashed; }
+  .badge.risk-high { color: var(--human); border-color: var(--human); }
+  .badge.risk-medium { color: var(--live); border-color: var(--live); }
 </style>
 </head>
 <body>
@@ -236,6 +238,12 @@ async function pastRounds(job) {
     const key = `${job.id}/${n}`;
     if (roundCache.has(key)) { rows.push([n, roundCache.get(key)]); continue; }
     const lenses = Object.keys(job.reviews || {});
+    const ck = await firstLine(`jobs/${job.id}/round-${n}/checks.md`);
+    const ckv = ck === null ? null : /^CHECKS: PASS/.test(ck) ? "PASS" : /^CHECKS: FAIL/.test(ck) ? "CHANGES" : "skipped";
+    if (ckv === "CHANGES") {  // the round stopped at the check gate: no reviewer ran
+      const v = { checks: "CHANGES" };
+      roundCache.set(key, v); rows.push([n, v]); continue;
+    }
     const vals = await Promise.all(lenses.map(async (l) => {
       if ((job.reviews || {})[l] === "skipped") return "skipped";
       if (((job.round_carried || {})[n] || []).includes(l)) return "carried";
@@ -243,7 +251,7 @@ async function pastRounds(job) {
       const m = fl && fl.match(VERDICT_RE);
       return fl === null ? "missing" : m ? m[1] : "invalid";
     }));
-    const v = Object.fromEntries(lenses.map((l, i) => [l, vals[i]]));
+    const v = Object.assign(ckv ? { checks: ckv } : {}, Object.fromEntries(lenses.map((l, i) => [l, vals[i]])));
     if (Object.values(v).every((x) => ["PASS", "CHANGES", "skipped", "carried"].includes(x))) roundCache.set(key, v);
     rows.push([n, v]);
   }
@@ -254,7 +262,8 @@ function chip(lens, val, live, carried) {
   if (val === "carried") { val = "PASS"; carried = true; }
   const known = ["PASS", "CHANGES", "pending", "skipped"].includes(val);
   const cls = (known ? val : "bad") + (carried ? " carried" : "");
-  const title = `${lens}: ${val}${carried ? " (carried from an earlier round, not re-reviewed)" : ""}`;
+  const shown = lens === "checks" ? ({ CHANGES: "FAIL — no reviewer ran on this code", skipped: "none to run" }[val] || val) : val;
+  const title = `${lens}: ${shown}${carried ? " (carried from an earlier round, not re-reviewed)" : ""}`;
   return `<span class="chip ${cls}${live && val === "pending" ? " live" : ""}" title="${esc(title)}">${esc(lens)}${known ? "" : " ?"}</span>`;
 }
 
@@ -270,7 +279,10 @@ function cardHtml(job, past) {
   const tickets = Object.entries(job.tickets || {});
   const done = tickets.filter(([, s]) => s === "done").length;
   let h = `<div class="id"><span>${live ? '<span class="live-dot"></span>' : ""}${esc(num)} · ${esc(rest.join("-"))}</span>`
-    + (job.mode ? `<span class="badge">${esc(job.mode)}</span>` : "") + `</div>`
+    + `<span>`
+    + (job.risk && job.risk !== "low" ? `<span class="badge risk-${esc(job.risk)}" title="risk from the spec">${esc(job.risk)}</span> ` : "")
+    + (job.issue ? `<span class="badge" title="from GitHub issue #${esc(job.issue)}">#${esc(job.issue)}</span> ` : "")
+    + (job.mode ? `<span class="badge">${esc(job.mode)}</span>` : "") + `</span></div>`
     + `<div class="title">${esc(job.title || job.feature || "")}</div>`
     + (tokenLine(job) ? `<div class="label" title="token ledger in job.json">${esc(tokenLine(job))}</div>` : "");
   if (tickets.length) {
@@ -283,7 +295,9 @@ function cardHtml(job, past) {
     for (const [n, v] of past) {
       h += `<div class="round"><span class="r">R${n}</span>${Object.entries(v).map(([l, x]) => chip(l, x, false)).join("")}</div>`;
     }
-    h += `<div class="round"><span class="r">R${job.round}</span>${Object.entries(job.reviews || {}).map(([l, x]) => chip(l, x, job.stage === "review", (job.carried || {})[l] !== undefined)).join("")}</div>`;
+    const ck = { PASS: "PASS", FAIL: "CHANGES", pending: "pending", none: "skipped" }[job.checks];
+    const ckChip = ck ? chip("checks", ck, job.stage === "review" && job.checks === "pending") : "";
+    h += `<div class="round"><span class="r">R${job.round}</span>${ckChip}${Object.entries(job.reviews || {}).map(([l, x]) => chip(l, x, job.stage === "review", (job.carried || {})[l] !== undefined)).join("")}</div>`;
   }
   if (job.stage === "needs-human" && job.awaiting === "delivery") {
     h += `<div class="hint">approved; deliver: <code>/factory approve ${esc(job.id)}</code></div>`;

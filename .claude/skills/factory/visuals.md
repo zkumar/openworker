@@ -204,7 +204,14 @@ characterize verdict, `/factory show`):
    `Full-size view: ./factory/show.sh <job-id>` and carry on. Skip this step for
    characterize jobs: they have no `visuals/`.
 3. **Then** the short text summary and the question, ending with the exact
-   replies that work (`approve`, or what to change).
+   replies that work (`approve`, or what to change). When `decision_brief: true`
+   in `factory/config.md`, write that text as a brief with the `decision-brief`
+   skill: every item the human must settle is a numbered Decide row (approve
+   or rework, each open assumption, each `UNEXPLAINED` drift line, each
+   escalation reason), anything they must run by hand is under Actions, and
+   the rest is For your information. Keep every job id, ticket and file path.
+   The replies that work still close the message, and an answer by number
+   (`1 approve, 2 rework: <note>`) maps to them.
 
 A comment on a picture is a comment on the spec or the build: map it to the
 story, criterion or file it points at.
