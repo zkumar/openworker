@@ -5,7 +5,7 @@ checkout. `factory/jobs/` is runtime state: gitignored, never committed.
 
 ```
 factory/jobs/<job-id>/
-  job.json                    orchestrator only
+  job.json                    written only by factory/job.py (the orchestrator runs it)
   source.md                   import only: the original spec, verbatim
   spec.md                     shape: this session; quick/import: spec-writer
   tickets/<NN>-<slug>.md      same author as spec.md
@@ -19,6 +19,7 @@ factory/jobs/<job-id>/
   build/t<NN>.md              implementer (or characterizer) of ticket NN
   build/merge-t<NN>.md        merger (only when a ticket merge conflicts)
   build/fix-round-<N>.md      fixer, after review round N
+  round-<N>/checks.md         factory/check.py: the deterministic gate, before reviewers
   round-<N>/review-<lens>.md  one reviewer per lens
   decision.md                 approver (or orchestrator when rounds run out)
   pr.md                       approver
@@ -43,11 +44,13 @@ factory/jobs/<job-id>/
   "reviews": { "spec": "pending", "code": "pending", "security": "pending", "ux": "pending", "ui": "pending", "compliance": "skipped" },
   "tokens": { "spec-writer": 84000, "impl-t01": 92000, "review-r1-code": 41000 },
   "tokens_total": 217000,
+  "risk": "medium", "checks": "PASS",
   "updated": "2026-10-14T10:20:00Z" }
 ```
 
 - `mode`: `shaped`, `quick`, `imported` or `characterize`.
-- `stage`: `shape`, `ready`, `build`, `review`, `approve`, `pr-open`, `merged`, `needs-human`.
+- `stage`: `shape`, `ready`, `build`, `review`, `approve`, `pr-open`, `merged`, `needs-human`,
+  `dropped` (abandoned on the user's say-so: `job.py stage <id> dropped`; final, like `merged`).
   `pr-open` exists only with `merge_mode: pr`: the branch is pushed and a PR is open.
 - `round`: current review round, 0 until the first one starts.
 - `tickets`: every ticket file's stem mapped to `pending`, `building`, `done` or `blocked`.
@@ -72,7 +75,15 @@ factory/jobs/<job-id>/
   `passed`, `failed` or `none`; cleared on rework), `ci_repairs_used` (automatic
   CI repairs in a row, reset when CI passes) and `pr_feedback_seen` (the time of
   the newest PR comment already brought back).
-- Rewrite the whole file on every change and set `updated` to the current UTC time.
+- `risk`: `low`, `medium` or `high`, read from the spec's **Risk:** line by
+  `job.py tickets`; it decides whether the security lens can be skipped (see run.md).
+- `checks`: the deterministic gate for the current round: `pending`, `PASS`,
+  `FAIL` or `none` (nothing to run). Details in `round-<N>/checks.md`.
+- `issue`: the GitHub issue number the job came from (`/factory import <n>` or
+  `/factory queue`). `job.py create --issue` refuses a second job for one issue.
+- Never edit this file by hand or with an editor tool: every change is a
+  `python3 factory/job.py ...` command, which validates it, takes a lock, sets
+  `updated` and replaces the file atomically. See **Job state** in run.md.
 
 ## spec.md
 
@@ -84,6 +95,16 @@ snippet that pins a decision better than prose (say it came from a prototype).
 # <short title>
 
 > Feature: <the original request, verbatim>
+
+**Risk:** low | medium | high — <one line: why>
+(high: any **Merge policy** escalation line applies (money, access, identity,
+deploy/CI, schema or stored data, dependencies, one-way door); medium: new or
+changed handling of input from outside the program (command-line arguments,
+forms, HTTP requests, files, environment, messages), endpoints, file or network
+I/O, or storing or showing personal or health data; low: everything else, such
+as internal logic and pure functions (a function checking its own arguments is
+not outside input), docs, tests, copy or styling. When in doubt, pick the
+higher.)
 
 ## Problem
 The problem from the user's perspective.

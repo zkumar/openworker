@@ -52,6 +52,11 @@ APPROVE only if all of these hold:
   `**[product, confirmed <date>]**` was approved by a person at the spec gate:
   it is confirmed, and is no reason to escalate.
 - `drift.md` (if present) shows no `UNEXPLAINED` drift on a **risk** node.
+- The latest `round-<N>/checks.md` starts with `CHECKS: PASS` (or
+  `CHECKS: NONE` in a repo with nothing to run).
+- The spec's **Risk:** level fits the diff. If `security` was `skipped` because
+  the risk was `low`, but the change touches access, input handling, secrets,
+  dependencies or personal data, ESCALATE: the security lens never saw it.
 
 Otherwise ESCALATE. Name every policy line that applies.
 

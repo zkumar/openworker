@@ -7,6 +7,7 @@
 - quick_spec_gate: true            # spec stops at `ready` for a human before code
 - serial_browser_lenses: true      # ux then ui; one dev server at a time
 - rereview: changed        # changed: after round 1, re-run lenses that asked for changes, code, compliance,
+- security_skip_low_risk: false  # true: skip the security lens on jobs whose spec says Risk: low,
 
 ## Review lenses
 - spec: on
@@ -75,6 +76,43 @@ What the `visualizer` agent draws for approval (see `.claude/skills/factory/visu
 - ux_journey: auto       # screens and states a user moves through
 - ui_wireframes: auto    # grey-box HTML mock-ups of new or changed screens
 - as_built: on           # before approval, redraw from the code and report drift from the plan
+
+## Maps and briefs
+
+Optional companions. Each runs only when its key is `true` and its tool is
+installed; when the tool is missing the factory says so once and carries on.
+
+- story_map: true        # redraw factory/story-map.json with the story-map skill after each merge,
+                         # and name the story each job serves while shaping
+- floorplan: true        # refresh the Floorplan code map (floorplan/index.html) after each merge
+                         # and mark the cards the job changed
+- floorplan_skill: ~/Projects/floorplan/skills/floorplan  # Floorplan's skill folder (a clone,
+                         # or the plugin's skills/floorplan)
+- decision_brief: true   # every question to the human is a decision-brief brief; a hard
+                         # multi-option choice also gets its weighted board
+
+## Checks
+
+The deterministic gate (`factory/check.py`): runs after every build or fix and
+before any reviewer. A failure goes straight back to the fixer, so no review is
+spent on code that doesn't pass its own checks. `auto` detects lint, type-check,
+tests and build from the repo; or replace it with your commands, one per line,
+in order. See what it would run: `python3 factory/check.py . --list`.
+
+- check: .venv/bin/python -m pytest tests/test_channel_route.py tests/test_channels.py tests/test_dispatch_router.py tests/test_ingress.py tests/test_receipt_integrity.py tests/test_receipt_verification.py tests/test_runstore.py tests/test_keys.py -q   # the local gate in docs/known-failures.md; the full suite is CI's
+- check: cd surfaces/gui && npm run build
+- check_timeout_min: 15
+
+
+## Issue queue
+
+Used by `/factory queue`: open GitHub issues with this label become jobs, up to
+`max_parallel_jobs` at a time; each finished or waiting job frees its slot.
+
+- queue_label: factory
+- max_parallel_jobs: 2       # jobs running at once (each still runs its tickets in parallel)
+- queue_authors: collaborators  # collaborators: only issues opened by people with write access; any: all
+- queue_spec_gate: true      # true: each issue's spec waits for your approval before building
 
 ## Ports
 

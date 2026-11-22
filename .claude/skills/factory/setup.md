@@ -46,6 +46,18 @@ Walk `factory/config.md` with the user:
   page reviewers will fall back to reading code, and point at
   github.com/vercel-labs/agent-browser.
 - `max_parallel_implementers`: lower it to 1 for a small repo or a tight budget.
+- **Checks**: run `python3 factory/check.py . --list` and show what the check
+  gate would run. It must match the validation commands in AGENTS.md: if it
+  misses one or picks a wrong one, replace `- check: auto` with explicit
+  `- check: <command>` lines, in order (fast ones first). Then run
+  `python3 factory/check.py .` once; it must say `CHECKS: PASS` on the base
+  branch, or every job will start with a failure that isn't its own.
+- `security_skip_low_risk`: recommend `false` (the default) for regulated work
+  or anything handling personal data; `true` saves a review on small internal
+  changes elsewhere.
+- **Issue queue** (only if the user wants `/factory queue`): check
+  `gh auth status`, that the label exists (`gh label list`), and keep
+  `max_parallel_jobs` at 2 unless the token budget allows more.
 - **Merge policy**: read the list aloud and ask what else must always reach a
   human in this repo (for example "touches PHI", "changes a FHIR resource
   profile", "edits a migration"). Add each as a policy line.

@@ -60,6 +60,10 @@ Quote the spec line for every finding.
   no mocking of internal collaborators, no tests that would break on a
   behaviour-preserving refactor.
 - Glossary terms in test names match the domain language.
+- If AGENTS.md has an upstream-parity rule and the change adds or changes a
+  `third_party:` entry, check the parity report follows it. Spot-check at least
+  two PORTED rows against the named tests. A case on a risky path left MISSING,
+  or a DROPPED row with no tracked record, is a finding.
 
 ## Write review-spec.md
 

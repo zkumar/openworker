@@ -17,6 +17,12 @@ The harness around the governed engine: channels → work item → dispatcher �
 gate → JSON receipt. Fabric (a separate repo, `zkumar/regagentic-fabric`) owns the contracts;
 this repo consumes them and never invents contract fields.
 
+## Setup (fresh checkout or worktree)
+```
+python3 -m venv .venv && .venv/bin/pip install -q -e '.[dev]'
+cd surfaces/gui && npm install --no-audit --no-fund
+```
+
 ## Commands — proven in this checkout
 ```
 .venv/bin/python -m pytest tests/ -q            # full suite; see docs/known-failures.md for the baseline

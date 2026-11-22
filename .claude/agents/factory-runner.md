@@ -41,7 +41,8 @@ the pictures and asks. Never guess an answer that a person should give.
 
 Stop and hand back at:
 
-- a spec gate (`quick` with `quick_spec_gate: true`): stage `ready`;
+- a spec gate (`quick` with `quick_spec_gate: true`, or `issue` with
+  `queue_spec_gate: true`): stage `ready`;
 - **Needs human**, for any reason: escalation, blocked tickets, rounds
   exhausted, a characterize verdict, a busy main checkout, a failed merge;
 - **Deliver**, when `delivery_control` in config **Merge policy** is `root`
@@ -55,13 +56,20 @@ Stop and hand back at:
 
 ## Commands that create or rework a job
 
-- `quick <feature>`, `characterize <area>`: create the job as the playbook says;
-  your hand-back's first line names the new job id.
+- `quick <feature>`, `characterize <area>`, `issue <n>`: create the job as the
+  playbook says; your hand-back's first line names the new job id.
 - `next`: claim the backlog line (replace `claimed` with the job id once it
   exists), then run it as `quick` or `characterize`.
 - `watch`: when it reworks (CI repair, or `pr_feedback: auto`), you write the
   `rework-<k>.md` yourself (rework steps 0 and 1), then continue.
 - `rework <job-id>`: the root has written the note; start at rework step 2.
+
+## job.json goes through factory/job.py
+
+Every change to `job.json` is a `python3 factory/job.py` command (see **Job
+state** in run.md); never write the file any other way. Several runners may
+work at once, and the script's lock is what keeps their writes apart. If it
+refuses a move, re-read the job and follow **Resuming**; never use `--force`.
 
 ## Keep the root informed through files, not messages
 

@@ -90,17 +90,17 @@ def check_config() -> dict:
     if not limits.get("base_branch"):
         fail("config Limits: base_branch is missing")
         bad = True
-    for key in ("quick_spec_gate", "serial_browser_lenses"):
+    for key in ("quick_spec_gate", "serial_browser_lenses", "security_skip_low_risk"):
         if key in limits and limits[key] not in ("true", "false"):
             fail(f"config Limits: {key} must be true or false (got {limits[key]!r})")
             bad = True
     for lens, state in lenses.items():
         if lens not in LENSES_KNOWN:
             warn(f"config Review lenses: unknown lens '{lens}' (no built-in reviewer)")
-        if state not in ("on", "off"):
-            fail(f"config Review lenses: {lens} must be on or off (got {state!r})")
+        if state not in ("on", "off", "auto"):
+            fail(f"config Review lenses: {lens} must be on, off or auto (got {state!r})")
             bad = True
-        elif state == "on" and not (AGENTS / f"reviewer-{lens}.md").exists():
+        elif state in ("on", "auto") and not (AGENTS / f"reviewer-{lens}.md").exists():
             fail(f"lens '{lens}' is on but .claude/agents/reviewer-{lens}.md is missing")
             bad = True
     if not any(s == "on" for s in lenses.values()):
@@ -112,6 +112,26 @@ def check_config() -> dict:
     if policy.get("delivery_control", "root") not in ("root", "runner"):
         fail(f"config Merge policy: delivery_control must be root or runner (got {policy.get('delivery_control')!r})")
         bad = True
+    queue = keyvals(section(text, "Issue queue"))
+    mj = queue.get("max_parallel_jobs", "2")
+    if not mj.isdigit() or int(mj) < 1:
+        fail(f"config Issue queue: max_parallel_jobs must be a whole number >= 1 (got {mj!r})")
+        bad = True
+    if queue.get("queue_authors", "collaborators") not in ("collaborators", "any"):
+        fail(f"config Issue queue: queue_authors must be collaborators or any (got {queue.get('queue_authors')!r})")
+        bad = True
+    if queue.get("queue_spec_gate", "true") not in ("true", "false"):
+        fail(f"config Issue queue: queue_spec_gate must be true or false (got {queue.get('queue_spec_gate')!r})")
+        bad = True
+    ct = keyvals(section(text, "Checks")).get("check_timeout_min", "15")
+    if not ct.isdigit() or not 1 <= int(ct) <= 120:
+        fail(f"config Checks: check_timeout_min must be 1 to 120 minutes (got {ct!r})")
+        bad = True
+    checks = [l for l in section(text, "Checks").splitlines() if l.startswith("- check:")]
+    if not checks:
+        warn("config has no Checks section: the check gate auto-detects (re-run install.sh --update to add it)")
+    if limits.get("security_skip_low_risk") == "true" and lenses.get("compliance") == "on":
+        warn("security_skip_low_risk is true but compliance is on: security still reviews every job")
     mode = policy.get("merge_mode", "local")
     if mode not in ("local", "pr"):
         fail(f"config Merge policy: merge_mode must be local or pr (got {mode!r})")
@@ -268,8 +288,11 @@ def check_git(cfg: dict) -> None:
     if git("rev-parse", "--verify", "--quiet", ref).returncode != 0:
         fail(f"base ref '{ref}' not found" + (" (run: git fetch origin)" if mode == "pr" else ""))
         return
-    if git("cat-file", "-e", f"{ref}:.claude/skills/factory/SKILL.md").returncode != 0:
-        fail(f"the factory files are not committed on {ref}: agents work in worktrees and would not see them")
+    missing = [p for p in (".claude/skills/factory/SKILL.md", "factory/job.py", "factory/check.py")
+               if git("cat-file", "-e", f"{ref}:{p}").returncode != 0]
+    if missing:
+        fail(f"not committed on {ref}: {', '.join(missing)} (agents work in worktrees and would not see them;"
+             " re-run install.sh --update --commit)")
     else:
         ok(f"factory files committed on {ref}")
     if lenses.get("compliance") == "on" and git("cat-file", "-e", f"{ref}:COMPLIANCE.md").returncode != 0:
