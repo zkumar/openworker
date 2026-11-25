@@ -5,3 +5,4 @@ export {
   Checks, decisionOf, declaredLabel, LABEL, RecordSection, SignedLine, signoffWording, toneOf, WholeView,
   type Plan, type Signature, type Step,
 } from "./core";
+export { GateForm, type AnswerOutcome, type PendingField, type PendingInput } from "./GateForm";

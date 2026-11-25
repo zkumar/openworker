@@ -132,6 +132,31 @@ class CapabilityRouter:
         document = answer.get("view")
         return document if isinstance(document, dict) else None
 
+    def pending_input(self, session_id: str) -> Optional[dict]:
+        """The input gate the run is parked at (input gate v1.0.0, fabric CONTRACTS.md §15).
+
+        The one ingestion point for a parked run: returns the gate `{from, to, fields}` exactly
+        as Studio serves it (the bundle v1.1.0 `pending_input` object), or None when unparked.
+        """
+        gates = self._get(f"/api/runs/{session_id}/pending-input").get("gates") or []
+        return gates[0] if gates else None
+
+    def answer_input(self, session_id: str, answers: dict, *, agent: str | None = None) -> dict[str, Any]:
+        """Answer the parked run's input gate as the authenticated principal, then read the stop.
+
+        One post to Studio `POST /api/runs/{session_id}/input` (input gate v1.0.0): fabric
+        validates all or nothing, seals the answers and resumes the run. An identical re-post
+        answers 200 (idempotent) and reads as success. Any 4xx is a terminal FabricRefusal
+        carrying fabric's teaching detail; nothing here retries.
+        """
+        try:
+            outcome = self._post(f"/api/runs/{session_id}/input", {"answers": answers})
+        except httpx.HTTPStatusError as exc:
+            raise self._refusal(exc) from exc
+        except httpx.RequestError as exc:
+            raise FabricRefusal(f"fabric unreachable: {exc}", 0) from exc
+        return self._stop(session_id, outcome, agent)
+
     def _pursue(self, session_id: str, inputs: dict) -> Any:
         try:
             return self._post(f"/api/runs/{session_id}/pursue", {"inputs": inputs})
@@ -173,6 +198,7 @@ class CapabilityRouter:
         pursuing again would append duplicate steps and drift the decision. So look first.
         """
         gates = self._get(f"/api/runs/{run_id}/pending-signoff").get("gates") or []
+        pending = self.pending_input(run_id)
         finished = False
         try:
             for s in self._get("/api/sessions").get("sessions", []):
@@ -181,28 +207,35 @@ class CapabilityRouter:
                     break
         except Exception:
             finished = False
-        if gates or finished:
+        if gates or pending or finished:
             chain = self._get(f"/api/runs/{run_id}/chain")
             steps = [{"type": e.get("type"), "summary": e.get("summary"),
                       "state_before": e.get("state_before"), "state_after": e.get("state_after"),
                       "sha256": e.get("sha256")} for e in (chain.get("envelopes") or [])]
             return {"framed": True, "agent": agent, "awaiting_signoff": bool(gates), "gates": gates,
+                    "awaiting_input": pending is not None, "pending_input": pending,
                     "plan": {}, "steps": steps, "envelopes": len(steps),
-                    "decision": (gates[-1]["state_after"] if gates
+                    "decision": (gates[-1]["state_after"] if gates else None if pending
                                  else (steps[-1]["state_after"] if steps else None)),
-                    "session_id": run_id, "already": "gate" if gates else "complete"}
+                    "session_id": run_id,
+                    "already": "gate" if gates or pending else "complete"}
 
         stop = threading.Event()
         if on_step is not None:
             threading.Thread(target=self._watch, args=(run_id, on_step, stop), daemon=True).start()
         outcome = self._post(f"/api/runs/{run_id}/pursue", {"inputs": record})
         stop.set()
+        return self._stop(run_id, outcome, agent)
+
+    def _stop(self, run_id: str, outcome: Any, agent: str | None) -> dict[str, Any]:
+        """Read back where the run stopped after a pursue or an answer: gate, input or decision."""
         chain = self._get(f"/api/runs/{run_id}/chain")
         steps = [{"type": e.get("type"), "summary": e.get("summary"),
                   "state_before": e.get("state_before"), "state_after": e.get("state_after"),
                   "sha256": e.get("sha256"), "at": e.get("timestamp")}
                  for e in (chain.get("envelopes") or [])]
         gates = self._get(f"/api/runs/{run_id}/pending-signoff").get("gates") or []
+        pending = self.pending_input(run_id)
         plan = {}
         view = None
         if agent:
@@ -218,6 +251,7 @@ class CapabilityRouter:
                 plan = {}
             view = self.view(agent)
         result = {"framed": True, "agent": agent, "awaiting_signoff": bool(gates), "gates": gates,
+                  "awaiting_input": pending is not None, "pending_input": pending,
                   "plan": plan, "steps": steps, "envelopes": len(steps),
                   "decision": (outcome or {}).get("decision") or (gates[-1]["state_after"] if gates else None),
                   "session_id": run_id}
@@ -243,8 +277,10 @@ class CapabilityRouter:
             watcher.start()
         outcome = self._pursue(session_id, item)
         stop.set()
-        paused = bool(outcome.get("paused"))
+        awaiting_input = bool(outcome.get("awaiting_input"))
+        paused = bool(outcome.get("paused")) and not awaiting_input
         gates = self._get(f"/api/runs/{session_id}/pending-signoff").get("gates") or [] if paused else []
+        pending = self.pending_input(session_id) if awaiting_input else None
         chain = self._get(f"/api/runs/{session_id}/chain")
         steps = [
             {"type": e.get("type"), "summary": e.get("summary"),
@@ -258,6 +294,8 @@ class CapabilityRouter:
             "human_gate_required": card.get("human_gate_required"),
             "awaiting_signoff": paused,
             "gates": gates,
+            "awaiting_input": pending is not None,
+            "pending_input": pending,
             "decision": outcome.get("decision") or (gates[-1]["state_after"] if gates else None),
             "plan": {"name": plan["name"],
                      "signoff": next((t.get("signoff") for t in plan["transitions"]

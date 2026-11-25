@@ -558,6 +558,46 @@ def create_app(manager: SessionManager) -> FastAPI:
                 pass
         return {"ok": ok, "signed": signed}
 
+    @app.post("/v1/inbox/{item_id}/input")
+    def answer_inbox_item_input(item_id: str, body: dict, request: Request) -> dict[str, Any]:
+        """OW-F-018: answer the input gate a work item's run is parked at (fabric §15).
+
+        The dispatcher posts the answers to Studio; the item flips to the run's next stop. A
+        fabric refusal is relayed with its teaching detail and its 4xx status, never retried.
+        """
+        from coworker.dispatch.router import FabricRefusal
+
+        item = manager.inbox.get(item_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="unknown item")
+        mine = getattr(request.state, "tenant", "") or ""
+        role = getattr(request.state, "role", "") or ""
+        if role != "admin" and mine and mine != ((item.data or {}).get("tenant") or "default"):
+            raise HTTPException(status_code=404, detail="unknown item")
+        answers = body.get("answers")
+        if not isinstance(answers, dict):
+            raise HTTPException(status_code=422, detail="answers must be an object of field values")
+        try:
+            result = manager.answer_channel_input(
+                item_id, answers, by=request.headers.get("x-openworker-actor", ""))
+        except FabricRefusal as exc:
+            status = exc.status if 400 <= exc.status < 500 else 502
+            raise HTTPException(status_code=status, detail=exc.detail) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if _temporal_selected():
+            # The durable workflow waits on the input gate: wake it to read the next stop.
+            # Best-effort, like a denial: its fallback poll closes the wait otherwise.
+            try:
+                from coworker.dispatch.temporal_executor import current
+
+                current().signal_input_answered(item_id)
+            except Exception:
+                pass
+        return {"ok": True, "awaiting_input": result.get("awaiting_input"),
+                "awaiting_signoff": result.get("awaiting_signoff"),
+                "decision": result.get("decision")}
+
     @app.get("/v1/subscriptions")
     def subscriptions() -> dict[str, Any]:
         # Global view-only list: each (session → channel) subscription, enriched with the session's

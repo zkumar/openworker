@@ -5,7 +5,9 @@
 // The view sends ui/initialize and then ui/notifications/initialized; the host sends the tool
 // result (ui/notifications/tool-result, a CallToolResult) and its theme. The view reports its
 // size so the host can fit the frame, answers ping and ui/resource-teardown, and asks the host
-// to open a link. Read-only (adr-read-only-renderer-v1): opening a link is its only request.
+// to open a link. Its one tool call is the input gate's answer (adr-view-calls-one-tool): the
+// bridge frames tools/call for regagent_answer_input alone, with the session and the answers and
+// never an identity (the gateway seals its deployment's answerer).
 
 /** A CallToolResult as the host passes it. */
 export interface ToolResult {
@@ -17,6 +19,7 @@ export interface ToolResult {
 /** What the view asks of its host. */
 export interface Host {
   openLink(url: string): Promise<void>;
+  answerInput(sessionId: string, answers: Record<string, unknown>): Promise<ToolResult>;
 }
 
 export type Theme = "light" | "dark";
@@ -27,6 +30,9 @@ interface Handlers {
 }
 
 const PROTOCOL_VERSION = "2026-01-26";
+
+// the one tool the view may call (fabric CONTRACTS.md §14, the answer tool)
+const ANSWER_TOOL = "regagent_answer_input";
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void };
 
@@ -95,5 +101,8 @@ export function connect(name: string, handlers: Handlers, parent: Window = windo
 
   return {
     openLink: (url) => request("ui/open-link", { url }).then(() => undefined),
+    answerInput: (sessionId, answers) =>
+      request("tools/call", { name: ANSWER_TOOL, arguments: { session_id: sessionId, answers } })
+        .then((result) => (result ?? {}) as ToolResult),
   };
 }

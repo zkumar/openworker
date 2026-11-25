@@ -1,17 +1,22 @@
 // The renderer app's work-item view (OW-F-016 ticket 02): the answer bundle drawn through the
-// shared core with RunPanel semantics, the fallback order of adr-text-answer-whole-contract, and
-// the read-only gate of adr-read-only-renderer-v1.
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+// shared core with RunPanel semantics, the fallback order of adr-text-answer-whole-contract, the
+// signature gate as state only, and (OW-F-018) the input gate answered through the host's one
+// tool call (adr-view-calls-one-tool).
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { RunPanel, type RunData } from "../components/RunPanel";
 import { workItemStates } from "../gallery/states/work-item";
-import { invalidViewBundle, noViewBundle, payorBundle, toolResult } from "./fixtures";
+import { invalidViewBundle, noViewBundle, parkedBundle, payorBundle, toolResult } from "./fixtures";
 import type { ToolResult } from "./host";
 import { WorkItemView } from "./WorkItemView";
 
 const NOTICE = "This work item can't be drawn here. The text answer above is complete.";
-const host = () => ({ openLink: vi.fn(async () => undefined) });
+// a host whose answer tool replies with `reply`
+const host = (reply: ToolResult = {}) => ({
+  openLink: vi.fn(async () => undefined),
+  answerInput: vi.fn(async (_session: string, _answers: Record<string, unknown>) => reply),
+});
 const demo = workItemStates.find((s) => s.id === "payor-demo")!.payload as RunData;
 
 // the native panel's rendering of the same work item, for content comparison
@@ -130,6 +135,121 @@ describe("WorkItemView", () => {
       render(<WorkItemView result={toolResult({ ...payorBundle, awaiting_signoff: false })} host={host()} />);
       expect(footer().textContent).toBe("");
       expect(screen.queryByRole("button")).toBeNull();
+    });
+  });
+
+  describe("input gate (bundle v1.1.0)", () => {
+    function footer() {
+      return screen.getByTestId("work-item-view").querySelector("footer")!;
+    }
+
+    it("draws the gate form from pending_input in the footer, not the signature state", () => {
+      render(<WorkItemView result={toolResult(parkedBundle)} host={host()} />);
+      const form = within(footer()).getByTestId("gate-form");
+      expect(within(form).getByText("Waiting for your input")).toBeTruthy();
+      expect(within(form).getByText("This run needs these answers before it continues.")).toBeTruthy();
+      expect(within(form).getByLabelText("prior trial drug").tagName).toBe("TEXTAREA");
+      expect(within(form).getByLabelText("trial weeks").getAttribute("type")).toBe("number");
+      expect(within(form).getByRole("button", { name: "Answer & resume" })).toBeTruthy();
+      expect(screen.queryByText("Awaiting signature")).toBeNull();
+      expect(screen.queryByText(/^Decision:/)).toBeNull();
+    });
+
+    it("draws no form when the bundle is not parked", () => {
+      render(<WorkItemView result={toolResult({ ...parkedBundle, awaiting_input: false, pending_input: null })} host={host()} />);
+      expect(screen.queryByTestId("gate-form")).toBeNull();
+    });
+
+    const answered = { from: "step_therapy", to: "criteria", fields: ["prior_trial_drug", "trial_weeks"] };
+
+    async function answer(h: ReturnType<typeof host>) {
+      render(<WorkItemView result={toolResult(parkedBundle)} host={h} />);
+      fireEvent.change(screen.getByLabelText("prior trial drug"), { target: { value: "metformin" } });
+      fireEvent.change(screen.getByLabelText("trial weeks"), { target: { value: "12" } });
+      fireEvent.click(screen.getByRole("button", { name: "Answer & resume" }));
+      await act(async () => {});
+    }
+
+    it("submits the session and the typed answers to the host's answer tool", async () => {
+      const h = host(toolResult({ ok: true, status: "awaiting_signoff", session_id: "run-payor-demo", answered }));
+      await answer(h);
+      expect(h.answerInput.mock.calls).toEqual([["run-payor-demo", { prior_trial_drug: "metformin", trial_weeks: 12 }]]);
+    });
+
+    it("flips to the signature gate when the run parks for signature next", async () => {
+      await answer(host(toolResult({
+        ok: true, status: "awaiting_signoff", requires_human_signature: true, session_id: "run-payor-demo", answered,
+      })));
+      expect(screen.queryByTestId("gate-form")).toBeNull();
+      expect(within(footer()).getByText("Awaiting signature")).toBeTruthy();
+      expect(within(footer()).getByText("This decision needs electronic signature (21 CFR Part 11).")).toBeTruthy();
+    });
+
+    it("flips to the decision when the run completes", async () => {
+      await answer(host(toolResult({
+        ok: true, status: "complete", session_id: "run-payor-demo", answered,
+        paused: false, decision: "approved", final_state: "approved", state: "approved", steps: 10,
+      })));
+      expect(screen.queryByTestId("gate-form")).toBeNull();
+      expect(screen.getByText(/^Decision:/).textContent).toBe("Decision: Authorized");
+      expect(footer().textContent).toBe("");
+    });
+
+    it("flips to the next gate's form when the run parks for input again", async () => {
+      await answer(host(toolResult({
+        ok: true, status: "awaiting_input", requires_human_input: true, session_id: "run-payor-demo", answered,
+        detail: "transition 'criteria' -> 'approved' awaits human input: ['reviewer_note']",
+        tenant_id: "demo", from_state: "criteria", to_state: "approved", fields: ["reviewer_note"],
+      })));
+      const form = within(footer()).getByTestId("gate-form");
+      expect(within(form).queryByLabelText("prior trial drug")).toBeNull();
+      expect((within(form).getByLabelText("reviewer note") as HTMLTextAreaElement).value).toBe("");
+    });
+
+    it("treats an idempotent reply as success and closes the gate", async () => {
+      await answer(host(toolResult({ ok: true, session_id: "run-payor-demo", answered, idempotent: true, state: "approved" })));
+      expect(screen.queryByTestId("gate-form")).toBeNull();
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("shows a refusal under Not accepted with the teaching detail, keeps the values and calls once", async () => {
+      const detail = "answers refused, nothing sealed: trial_weeks must be at least 1";
+      const h = host(toolResult({ ok: false, error: "ContractViolation", detail }));
+      await answer(h);
+      expect(screen.getByRole("alert").textContent).toBe(`Not accepted${detail}`);
+      expect((screen.getByLabelText("prior trial drug") as HTMLTextAreaElement).value).toBe("metformin");
+      expect((screen.getByLabelText("trial weeks") as HTMLInputElement).value).toBe("12");
+      expect(h.answerInput).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows a refusal that names only its error", async () => {
+      await answer(host(toolResult({ ok: false, error: "WrongIdKind" }, false)));
+      expect(screen.getByRole("alert").textContent).toBe("Not acceptedWrongIdKind");
+    });
+
+    it("shows an isError reply's text as the refusal", async () => {
+      await answer(host({ isError: true, content: [{ type: "text", text: "The gateway could not reach fabric." }] }));
+      expect(screen.getByRole("alert").textContent).toBe("Not acceptedThe gateway could not reach fabric.");
+      expect(screen.getByTestId("gate-form")).toBeTruthy();
+    });
+
+    it("disables submit only while the call is in flight", async () => {
+      let reply!: (r: ToolResult) => void;
+      const h = host();
+      h.answerInput.mockImplementation(() => new Promise<ToolResult>((r) => { reply = r; }));
+      await answer(h);
+      expect(screen.getByRole("button", { name: "Answer & resume" }).hasAttribute("disabled")).toBe(true);
+      await act(async () => reply(toolResult({ ok: false, error: "InputGateConflict", detail: "not parked" })));
+      expect(screen.getByRole("button", { name: "Answer & resume" }).hasAttribute("disabled")).toBe(false);
+      expect(h.answerInput).toHaveBeenCalledTimes(1);
+    });
+
+    it("draws a new tool result fresh, not the earlier answer's next stop", async () => {
+      const h = host(toolResult({ ok: true, status: "awaiting_signoff", session_id: "run-payor-demo", answered }));
+      await answer(h);
+      cleanup();
+      render(<WorkItemView result={toolResult({ ...parkedBundle })} host={h} />);
+      expect(screen.getByTestId("gate-form")).toBeTruthy();
     });
   });
 

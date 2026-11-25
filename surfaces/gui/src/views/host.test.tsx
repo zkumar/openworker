@@ -3,7 +3,7 @@
 import { act, fireEvent, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { payorBundle, toolResult } from "./fixtures";
+import { parkedBundle, payorBundle, toolResult } from "./fixtures";
 import { mount } from "./mount";
 
 let parent: Window;
@@ -109,6 +109,50 @@ describe("host bridge protocol", () => {
     expect(byMethod("ui/open-link")).toEqual([
       { jsonrpc: "2.0", id: expect.any(Number), method: "ui/open-link", params: { url } },
     ]);
+  });
+
+  describe("answering an input gate", () => {
+    async function answer() {
+      fromHost({ method: "ui/notifications/tool-result", params: toolResult(parkedBundle) });
+      fireEvent.change(screen.getByLabelText("prior trial drug"), { target: { value: "metformin" } });
+      fireEvent.change(screen.getByLabelText("trial weeks"), { target: { value: "12" } });
+      fireEvent.click(screen.getByRole("button", { name: "Answer & resume" }));
+      await act(async () => {});
+    }
+
+    it("calls regagent_answer_input through tools/call with the session and the answers only", async () => {
+      await answer();
+      expect(byMethod("tools/call")).toEqual([
+        {
+          jsonrpc: "2.0", id: expect.any(Number), method: "tools/call",
+          params: {
+            name: "regagent_answer_input",
+            arguments: { session_id: "run-payor-demo", answers: { prior_trial_drug: "metformin", trial_weeks: 12 } },
+          },
+        },
+      ]);
+    });
+
+    it("shows the host's refusal of the call as Not accepted and does not call again", async () => {
+      await answer();
+      const call = byMethod("tools/call")[0];
+      fromHost({ id: call.id, error: { code: -32603, message: "Tool regagent_answer_input is not available." } });
+      await act(async () => {});
+      expect(screen.getByRole("alert").textContent).toBe("Not acceptedTool regagent_answer_input is not available.");
+      expect(byMethod("tools/call")).toHaveLength(1);
+    });
+
+    it("draws the run's next stop from the tool's answer", async () => {
+      await answer();
+      const call = byMethod("tools/call")[0];
+      fromHost({ id: call.id, result: toolResult({
+        ok: true, status: "awaiting_signoff", requires_human_signature: true, session_id: "run-payor-demo",
+        answered: { from: "step_therapy", to: "criteria", fields: ["prior_trial_drug", "trial_weeks"] },
+      }) });
+      await act(async () => {});
+      expect(screen.queryByTestId("gate-form")).toBeNull();
+      expect(screen.getByText("Awaiting signature")).toBeTruthy();
+    });
   });
 
   it("ignores messages that do not come from its host", () => {

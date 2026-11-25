@@ -1,6 +1,6 @@
 import {
-  Checks, decisionOf, declaredLabel, LABEL, RecordSection, SignedLine, signoffWording, toneOf, WholeView,
-  type Plan, type Signature, type Step, type ViewDoc,
+  Checks, decisionOf, declaredLabel, GateForm, LABEL, RecordSection, SignedLine, signoffWording, toneOf, WholeView,
+  type AnswerOutcome, type PendingInput, type Plan, type Signature, type Step, type ViewDoc,
 } from "../workItem";
 
 // One channel work item, written for the person who has to ACT on it.
@@ -13,6 +13,9 @@ export interface RunData {
   decision?: string;
   envelopes?: number;
   awaiting_signoff?: boolean;
+  // the run is parked on an input gate (fabric §14 v1.1.0); pending_input names the fields it waits for
+  awaiting_input?: boolean;
+  pending_input?: PendingInput | null;
   running?: boolean;
   error?: string;
   retrying?: boolean;
@@ -32,6 +35,8 @@ type PanelProps = {
   data: RunData;
   pending: boolean;
   onDecide: (decision: "once" | "deny") => void;
+  // answers the input gate a parked run waits on; the panel refreshes to the next stop on success
+  onAnswer?: (answers: Record<string, unknown>) => Promise<AnswerOutcome>;
 };
 
 // The declared view applies whole or not at all (the shared core's WholeView); the reason it
@@ -47,7 +52,7 @@ export function RunPanel(props: PanelProps) {
 }
 
 function Panel({
-  data, pending, onDecide, view, notRendered,
+  data, pending, onDecide, onAnswer, view, notRendered,
 }: PanelProps & { view: ViewDoc | null; notRendered: string | null }) {
   const steps = data.steps ?? [];
   const decision = decisionOf(data);
@@ -118,9 +123,15 @@ function Panel({
       {/* what was checked, in the pack's words */}
       <Checks view={view} steps={steps} />
 
-      {/* the human gate, or the signature that closed it */}
+      {/* the human gate (input before signature), or the signature that closed it */}
       <footer className="flex flex-wrap items-center gap-3 border-t border-line px-4 py-3">
-        {pending ? (
+        {pending && data.awaiting_input && data.pending_input && onAnswer ? (
+          <GateForm
+            key={`${data.pending_input.from}>${data.pending_input.to}`}
+            pending={data.pending_input}
+            onSubmit={onAnswer}
+          />
+        ) : pending ? (
           <>
             <div className="min-w-0 flex-1">
               <div className="text-[13px] font-medium text-ink">Waiting for your signature</div>

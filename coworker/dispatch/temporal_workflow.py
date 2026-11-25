@@ -47,10 +47,11 @@ def _activity(name: str, *args: Any, timeout_s: int = 300) -> Any:
 
 @workflow.defn(name="WorkItemWorkflow")
 class WorkItemWorkflow:
-    """frame+capability → fabric pursue → signoff wait (Signal) → sign + receipt → learn."""
+    """frame+capability → fabric pursue → input wait → signoff wait (Signal) → sign + receipt → learn."""
 
     def __init__(self) -> None:
         self._resolution: Optional[tuple[str, str]] = None  # ("approved"|"rejected", by)
+        self._answered = False                              # OW-F-018: the input gate woke us
 
     @workflow.signal
     def signoff_resolved(self, approver: str) -> None:
@@ -62,6 +63,10 @@ class WorkItemWorkflow:
         if self._resolution is None:
             self._resolution = ("rejected", by or "a human")
 
+    @workflow.signal
+    def input_answered(self) -> None:
+        self._answered = True
+
     @workflow.run
     async def run(self, item: dict) -> dict:
         inbox_id: str = item["inbox_id"]
@@ -72,9 +77,23 @@ class WorkItemWorkflow:
             return {"workflow_version": WORKFLOW_VERSION, **framed}
 
         result = await _activity("execute_work_item", inbox_id, timeout_s=600)
-        if result.get("failed") or not result.get("awaiting_signoff"):
-            if not result.get("failed"):
-                await _activity("learn_work_item", inbox_id)
+        if result.get("failed"):
+            return {"workflow_version": WORKFLOW_VERSION, **result}
+
+        # OW-F-018: the input gate, mirrored beside the signoff wait below. The sidecar posts
+        # the human's answers to fabric and publishes the run's next stop on the item; the
+        # Signal only wakes us (it carries nothing) and the slow poll covers a lost Signal.
+        # The next stop may be another input gate, the signoff gate, or the decision.
+        while result.get("awaiting_input"):
+            try:
+                await workflow.wait_condition(lambda: self._answered, timeout=poll)
+            except TimeoutError:
+                pass
+            self._answered = False      # cleared before the read: a later Signal wakes us again
+            result = {**result, **await _activity("check_input", inbox_id)}
+
+        if not result.get("awaiting_signoff"):
+            await _activity("learn_work_item", inbox_id)
             return {"workflow_version": WORKFLOW_VERSION, **result}
 
         # The human gate. The inbox resolution sends the Signal; the slow poll is the fallback

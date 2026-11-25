@@ -2088,6 +2088,25 @@ export async function resolveInboxItem(
   return res.json();
 }
 
+/** OW-F-018: answer the input gate a channel work item's run is parked on. The sidecar posts the
+ * answers through the dispatcher to Studio; a refusal comes back with fabric's teaching detail and
+ * is never retried here. */
+export async function answerInboxItemInput(
+  id: string,
+  answers: Record<string, unknown>,
+): Promise<{ ok: true } | { ok: false; detail: string }> {
+  const base = engineBase(inboxItemMachines.get(id));
+  const res = await fetch(`${base}/v1/inbox/${encodeURIComponent(id)}/input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ answers }),
+  });
+  if (res.ok) return { ok: true };
+  const body = await res.json().catch(() => ({}));
+  const detail = body?.detail;
+  return { ok: false, detail: typeof detail === "string" ? detail : JSON.stringify(detail ?? res.status) };
+}
+
 // -- channel subscriptions (view-only) ----------------------------------------
 export interface Subscription {
   session_id: string;

@@ -51,3 +51,30 @@ maps them at one ingestion point and never invents fields. _Avoid_: "view payloa
 **Host bridge**: the renderer app's JSON-RPC 2.0 postMessage line to its host (MCP Apps
 protocol 2026-01-26): initialize, tool-result, host context (theme), size-changed, open-link,
 teardown. _Avoid_: "iframe glue".
+
+**Input gate**: a run parked on the declared fields a human must supply before a transition
+executes (fabric contract, CONTRACTS.md section 15 v1.0.0). In the harness it shows as the
+"Waiting for your input" gate section of a work item. _Avoid_: question prompt, elicitation.
+
+**Gate form**: the harness-reserved form drawn from the bundle's `pending_input` object
+(`{from, to, fields: [{name, type}]}`), one control per listed field, typed from the
+capability card, submitted all or nothing. The declared view never controls it. _Avoid_:
+input dialog, wizard.
+
+**question**: the harness component drawing one gate field as a labelled control chosen by
+the field's declared card type. Harness-reserved in v1.1: packs cannot declare it until
+fabric publishes view contract v1.1. _Avoid_: free-form question.
+
+**input_group**: the harness component grouping the gate's question controls with the
+submit action. Harness-reserved in v1.1, like `question`. _Avoid_: form section.
+
+**App-only tool**: a gateway tool named in the read-only bridge entry's server-side
+allowlist and absent from every entry's include list, served only to the trusted renderer
+(fabric adr-app-only-is-the-allowlist-delta). The harness drops any tool whose listing
+meta marks `ui.visibility: "app"` before agent callables are built, so no configuration
+can hand it to an agent. _Avoid_: hidden tool, invisible tool.
+
+**Answer path**: how a human's gate answers reach fabric. Native: the dispatcher posts
+Studio `POST /api/runs/{session_id}/input` as the authenticated principal. Renderer: the
+view calls `regagent_answer_input(session_id, answers)` over the host bridge. Both are
+terminal on refusal; a 4xx-class answer is never retried.

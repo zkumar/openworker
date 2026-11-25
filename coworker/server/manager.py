@@ -8056,11 +8056,16 @@ class SessionManager:
         data = dict(item.data or {})
         steps = result.get("steps") or data.get("steps") or []
         gated = bool(result.get("gates") or result.get("awaiting_signoff"))
+        # OW-F-018: a run parked on an input gate (fabric §15) waits beside the signoff gate.
+        # The gate's field names ride on the item for the panel; never the answers, never the
+        # receipt (adr-gate-never-in-receipt).
+        parked = bool(result.get("awaiting_input"))
         decided = result.get("decision")
         item.data = {**data,
                      "agent": result.get("agent"), "decision": decided,
                      "fabric_run": result.get("session_id"),
                      "awaiting_signoff": gated, "plan": result.get("plan"),
+                     "awaiting_input": parked, "pending_input": result.get("pending_input"),
                      "capabilities": result.get("capabilities"),
                      "running": False, "steps": steps, "envelopes": len(steps)}
         if result.get("view") is not None:
@@ -8070,9 +8075,10 @@ class SessionManager:
         ref = self._record_ref(item.data.get("record"))
         label = f"{item.data.get('channel', 'channel')}" + (f" · {ref}" if ref else "")
         item.title = (f"Sign off: {result.get('agent')} → {decided} · {ref}" if gated
+                      else f"{label} · needs your answers" if parked
                       else f"{label} · {decided}")
         self._active_runs.discard(item_id)
-        self.runs.finish(item_id, "gate" if gated else "sealed")
+        self.runs.finish(item_id, "gate" if gated or parked else "sealed")
         item.body = (f"{len(steps)} steps sealed. "
                      f"Signature: {(result.get('plan') or {}).get('signoff') or 'human sign-off'}."
                      if gated else f"{len(steps)} steps sealed.")
@@ -8085,6 +8091,34 @@ class SessionManager:
             # The session title is written once by the store; the outcome lives on the item
             # (its title) and in the panel, so nothing here claims a stale status.
             self.session_store.save(record)
+
+    def answer_channel_input(self, item_id: str, answers: dict[str, Any],
+                             by: str = "") -> dict[str, Any]:
+        """Answer the input gate a channel item's run is parked at, then publish its next stop.
+
+        OW-F-018: the dispatcher posts Studio's input endpoint as the authenticated principal
+        (fabric §15); fabric validates, seals the answers and resumes. A FabricRefusal propagates
+        untouched and leaves the item parked: a refusal is never retried. The answers are
+        neither stored on the item nor logged; fabric's chain is their only home. Fabric seals
+        the dispatcher's principal as `answered_by`, so the item records who answered (`by`,
+        never the answers), as the signature gate records its approver.
+        """
+        from datetime import datetime as _now
+
+        from coworker.dispatch import CapabilityRouter
+
+        item = self.inbox.get(item_id)
+        fabric_run = ((item.data or {}).get("fabric_run") if item is not None else None)
+        if item is None or not fabric_run:
+            raise ValueError(f"work item {item_id!r} carries no fabric run to answer")
+        result = CapabilityRouter().answer_input(fabric_run, answers,
+                                                 agent=(item.data or {}).get("agent"))
+        answered = {"actor": by or "a human", "at": _now.now().strftime("%Y-%m-%d %H:%M")}
+        item.data = {**(item.data or {}),
+                     "input_answered_by": [*((item.data or {}).get("input_answered_by") or []),
+                                           answered]}
+        self.channel_run_finish(item_id, result, item.session_id)
+        return result
 
     def resume_interrupted_runs(self) -> None:
         """Durable restart: re-drive every run the process died inside of.
