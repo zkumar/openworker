@@ -76,7 +76,10 @@ def receipt_body(
         "status": ("sealed" if sig else
                    "rejected" if data.get("not_found") else
                    "error" if data.get("error") else
-                   "awaiting_signature" if data.get("awaiting_signoff") else "unknown"),
+                   "awaiting_signature" if data.get("awaiting_signoff") else
+                   # OW-F-018: a parked input gate is a status value only; its fields and the
+                   # answers never enter the receipt (adr-gate-never-in-receipt).
+                   "awaiting_input" if data.get("awaiting_input") else "unknown"),
         "decision": data.get("decision"),
         "error": data.get("error") or None,
         "reason": ("request id not found in the pack's records" if data.get("not_found")
