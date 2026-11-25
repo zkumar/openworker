@@ -12,3 +12,8 @@ body {
   background: var(--panel);
   -webkit-font-smoothing: antialiased;
 }
+
+/* the gate form's submit, drawn as the GUI draws it (styles.css button.btn, .approval-primary) */
+button.btn { font: inherit; font-size: var(--fs-ui); padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--panel); cursor: pointer; }
+.btn.approval-primary { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.btn.approval-primary:hover { background: var(--accent-soft); }

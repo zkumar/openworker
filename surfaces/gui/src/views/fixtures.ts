@@ -1,6 +1,7 @@
 // Answer bundles for the renderer app's tests, in the shape of fabric's work-item bundle v1.0.0
-// (CONTRACTS.md §14): the payor demo work item from the gallery (synthetic, OW-F-015 ticket 05)
-// as a bundle, the same item with no view, and with an invalid view.
+// and v1.1.0 (CONTRACTS.md §14): the payor demo work item from the gallery (synthetic, OW-F-015
+// ticket 05) as a bundle, the same item with no view, with an invalid view, and parked at an
+// input gate.
 import { payorDemoView, workItemStates } from "../gallery/states/work-item";
 import type { ToolResult } from "./host";
 
@@ -27,6 +28,22 @@ export const payorBundle = {
 };
 
 export const noViewBundle = { ...payorBundle, view: null };
+
+// the same work item parked at an input gate (bundle v1.1.0, RFC 0056): no decision yet, the
+// gate's fields with their declared types as the pending-input read serves them
+export const parkedBundle = {
+  ...payorBundle,
+  bundle_version: "1.1.0",
+  decision: null,
+  final_state: null,
+  awaiting_signoff: false,
+  awaiting_input: true,
+  pending_input: {
+    from: "step_therapy",
+    to: "criteria",
+    fields: [{ name: "prior_trial_drug", type: "str" }, { name: "trial_weeks", type: "int" }],
+  },
+};
 
 export const invalidViewBundle = {
   ...payorBundle,
