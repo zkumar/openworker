@@ -44,6 +44,10 @@ the same list CI's `pytest-gate` job runs, so the local and CI gates do not drif
 - **`pytest-gate` blocks.** It runs exactly the 12 files of the local gate above. A red gate
   means a real regression in the product's tests. The fabric-dependent tests in
   `test_channel_route.py` and `test_dispatch_router.py` skip there (no fabric at :8766 in CI).
+  The tests that need the temporal extra (the two durable tests in `test_dispatch_router.py`
+  and one in `test_temporal_optin.py`) also skip there: CI does not install
+  `openworker[temporal]`, whose `rfsdk-kernel` is not on PyPI. With
+  `OPENWORKER_EXECUTOR=temporal` set they fail instead of skipping.
 - **`pytest-full` does not block.** It runs the whole suite (`pytest tests -q --cov=coworker`)
   with job-level `continue-on-error: true` and still uploads the `coverage-report` artifact.
   Its failures are the debt described below, **not expected results**: nothing is marked
