@@ -1,6 +1,7 @@
 """A3b — the harness's capability router: pure match, then the governed loop."""
 
 import json
+import os
 import urllib.request
 
 import httpx
@@ -30,7 +31,13 @@ def _fabric_up() -> bool:
         return False
 
 
-@pytest.mark.skipif(not _fabric_up(), reason="no fabric at :8766")
+def _fabric_live() -> bool:
+    """A live fabric and a configured identity: without one the harness refuses by design."""
+    return _fabric_up() and all(os.environ.get(name, "").strip() for name in
+                                ("REGAGENTIC_FABRIC_USERNAME", "REGAGENTIC_FABRIC_PASSWORD"))
+
+
+@pytest.mark.skipif(not _fabric_live(), reason="no fabric at :8766 or no fabric credentials")
 def test_route_executes_the_governed_run_and_seals():
     result = CapabilityRouter(learn=False).route({
         "request_id": "PA-2026-001",
@@ -506,3 +513,27 @@ def test_missing_fabric_credentials_refuse_signing(signoff_item, monkeypatch, un
     data = manager.inbox.get(inbox_id).data
     assert SIGNED_BODY_KEY not in data
     assert "receipt_digest_recorded" not in data
+
+
+SENTINEL = "sentinel-password-4f9c"
+
+
+def test_credential_values_never_leak(fabric, monkeypatch, caplog):
+    import logging
+
+    caplog.set_level(logging.DEBUG)
+    stub = fabric(_undeclared)
+    monkeypatch.setenv("REGAGENTIC_FABRIC_PASSWORD", SENTINEL)
+    monkeypatch.delenv("REGAGENTIC_FABRIC_USERNAME")
+    with pytest.raises(router_module.FabricRefusal) as missing:
+        CapabilityRouter(learn=False).frame(dict(ITEM))
+    monkeypatch.setenv("REGAGENTIC_FABRIC_USERNAME", FABRIC_USER)
+    stub.login_response = _refused(401, "invalid username or password")
+    with pytest.raises(router_module.FabricRefusal) as rejected:
+        CapabilityRouter(learn=False).frame(dict(ITEM))
+    assert rejected.value.status == 401
+    assert stub.logins == [{"username": FABRIC_USER, "password": SENTINEL}], "the 401 path ran"
+    assert SENTINEL not in missing.value.detail
+    assert SENTINEL not in rejected.value.detail
+    assert caplog.records, "the stubbed fabric calls were logged"
+    assert all(SENTINEL not in record.getMessage() for record in caplog.records)
