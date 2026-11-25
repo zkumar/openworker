@@ -22,6 +22,7 @@ import {
   getAttendance,
   PERSONAS_CHANGED,
   resolveInboxItem,
+  answerInboxItemInput,
   routeInboxItemLike,
   deleteSession,
   getAllSessions,
@@ -619,6 +620,21 @@ export function App() {
     setSignError(outcome?.sign_error ?? null);
     refreshSigned(); // the resolved gate persists its signature on the item — reload it
     refreshSessions(); // attention badge should drop right away
+  };
+
+  // A run parked on an input gate: post the answers, then reload the item at the run's next stop.
+  const answerSessionInbox = async (id: string, answers: Record<string, unknown>) => {
+    let outcome: Awaited<ReturnType<typeof answerInboxItemInput>>;
+    try {
+      outcome = await answerInboxItemInput(id, answers);
+    } catch (e) {
+      return { ok: false as const, detail: e instanceof Error ? e.message : String(e) };
+    }
+    if (outcome.ok) {
+      refreshSigned();
+      refreshSessions();
+    }
+    return outcome;
   };
 
   // The Mode menu's "Answer for me while I'm away" toggle: attendance "auto".
@@ -2318,6 +2334,7 @@ export function App() {
                 }}
                 pending
                 onDecide={(d) => void resolveSessionInbox(sessionInbox[0].id, d)}
+                onAnswer={(answers) => answerSessionInbox(sessionInbox[0].id, answers)}
               />
             ) : signedItem ? (
               <RunPanel data={signedItem.data as RunData} pending={false} onDecide={() => {}} />
