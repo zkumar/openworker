@@ -13,6 +13,7 @@ type RunData = {
   retrying?: boolean;
   running?: boolean;
   awaiting_signoff?: boolean;
+  awaiting_input?: boolean;
   signature?: { approver?: string; at?: string };
 };
 
@@ -41,6 +42,7 @@ function statusOf(item: InboxItem): Status {
       : { label: "failed", tone: "text-danger", tab: "failed" };
   }
   if (d.signature) return { label: `sealed · ${d.decision ?? ""}`.trim(), tone: "text-ok", tab: "sealed" };
+  if (d.awaiting_input) return { label: "needs your answers", tone: "text-warn", tab: "todo" };
   if (d.awaiting_signoff || item.state === "pending")
     return { label: "needs your signature", tone: "text-warn", tab: "todo" };
   return { label: String(d.decision ?? "done"), tone: "text-ink", tab: "sealed" };
