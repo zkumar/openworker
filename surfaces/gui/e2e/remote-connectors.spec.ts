@@ -159,7 +159,7 @@ test("machine scope: the machine's own connectors, sealed connect, honest OAuth 
 
   // Manual connect: the field seals in-tab; the wire never sees the token.
   await page.getByTestId("remote-connect-linear").click();
-  await page.locator('input[type="password"]').fill("lin_api_SECRETVALUE");
+  await page.getByRole("textbox", { name: "API key" }).fill("lin_api_SECRETVALUE");
   await page.getByTestId("remote-connect-submit-linear").click();
   await expect.poll(() => sealedBody).toContain("sealed_b64");
   expect(sealedBody).not.toContain("lin_api_SECRETVALUE");

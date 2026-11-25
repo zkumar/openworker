@@ -22,7 +22,7 @@ test("skills-session: new skill offered in '/', disabled one absent", async ({ p
   await page.getByRole("button", { name: "Skills", exact: true }).click();
   await page.getByRole("button", { name: /Add skill/ }).click();
   await page.getByText("Write it myself").click();
-  await page.getByLabel("Name").fill("fresh-skill");
+  await page.getByLabel("Name", { exact: true }).fill("fresh-skill");
   await page.getByLabel("Instructions").fill("Do the fresh thing.");
   await page.getByRole("button", { name: "Save skill" }).click();
   await expect(page.getByRole("status")).toContainText("fresh-skill");
