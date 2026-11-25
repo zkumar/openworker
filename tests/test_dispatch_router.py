@@ -101,6 +101,10 @@ class StubFabric:
         if path == f"/api/runs/{RUN}/input":
             self.answer_bodies.append(json.loads(request.content))
             return self.answer_response(request)
+        if path == f"/api/runs/{RUN}/receipt-digest":
+            return httpx.Response(200, json={"recorded": True})
+        if path == f"/api/runs/{RUN}/signoff":
+            return httpx.Response(200, json={"session_id": RUN, "signed": True})
         if path == f"/api/runs/{RUN}/chain":
             return httpx.Response(200, json={"envelopes": []})
         if path == "/api/sessions":
@@ -471,3 +475,34 @@ def test_missing_fabric_credentials_refuse_dispatch(fabric, monkeypatch, unset):
     assert "REGAGENTIC_FABRIC_USERNAME" in refused.value.detail
     assert "REGAGENTIC_FABRIC_PASSWORD" in refused.value.detail
     assert stub.calls == []
+
+
+@pytest.fixture
+def signoff_item(fabric, tmp_path, monkeypatch):
+    """A sidecar holding one work item whose run is parked at the signoff gate."""
+    stub = fabric(_undeclared)
+    manager, inbox_id = _finished(tmp_path, monkeypatch, _route())
+    stub.calls.clear()
+    stub.logins.clear()
+    return stub, manager, inbox_id
+
+
+def test_signing_logs_in_with_the_configured_fabric_identity(signoff_item):
+    stub, manager, inbox_id = signoff_item
+    manager.sign_channel_item(manager.inbox.get(inbox_id).session_id)
+    assert stub.logins == [{"username": FABRIC_USER, "password": FABRIC_PASSWORD}]
+    assert f"POST /api/runs/{RUN}/signoff" in stub.calls
+
+
+@MISSING
+def test_missing_fabric_credentials_refuse_signing(signoff_item, monkeypatch, unset):
+    from coworker.receipts import SIGNED_BODY_KEY
+
+    stub, manager, inbox_id = signoff_item
+    _configure(monkeypatch, unset)
+    with pytest.raises(router_module.FabricRefusal):
+        manager.sign_channel_item(manager.inbox.get(inbox_id).session_id)
+    assert stub.calls == []
+    data = manager.inbox.get(inbox_id).data
+    assert SIGNED_BODY_KEY not in data
+    assert "receipt_digest_recorded" not in data
