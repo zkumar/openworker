@@ -40,6 +40,25 @@ def test_env_listing_does_not_reveal_the_token(monkeypatch, tmp_path):
     assert "COWORKER_API_TOKEN" not in out
 
 
+def test_fabric_credentials_are_not_in_the_shell_environment(monkeypatch, tmp_path):
+    """The sidecar's fabric identity posts signoffs; a command the agent runs must not be
+    able to read it and sign a regulated decision past the human gate."""
+    monkeypatch.setenv("REGAGENTIC_FABRIC_USERNAME", "FABRIC-USER")
+    monkeypatch.setenv("REGAGENTIC_FABRIC_PASSWORD", "FABRIC-SECRET")
+    ex = LocalExecutor(cwd=str(tmp_path))
+    try:
+        out = _stdout(ex.run("env", timeout=20))
+        task = ex.run_background("env")
+        bg = ex.background_output(task["task_id"], wait_seconds=10)["output"]
+    finally:
+        ex.close()
+    for listing in (out, bg):
+        assert "FABRIC-SECRET" not in listing
+        assert "REGAGENTIC_FABRIC_PASSWORD" not in listing
+        assert "REGAGENTIC_FABRIC_USERNAME" not in listing
+    assert "PATH=" in bg, f"expected the background env listing, got {bg!r}"
+
+
 def test_the_users_own_keys_are_still_available(monkeypatch, tmp_path):
     """Scoped deliberately: the user's provider keys stay, so builds and CLIs keep working.
     Only OpenWorker's own credential is withheld."""
