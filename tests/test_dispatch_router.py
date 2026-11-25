@@ -1,5 +1,6 @@
 """A3b — the harness's capability router: pure match, then the governed loop."""
 
+import json
 import urllib.request
 
 import httpx
@@ -67,6 +68,10 @@ class StubFabric:
     def __init__(self, view_response):
         self.view_response = view_response          # callable(request) -> httpx.Response
         self.calls: list[str] = []
+        self.pursued = {"paused": True, "decision": "denied"}
+        self.input_gates: list[dict] = []           # OW-F-018: the pending-input read's gates
+        self.answer_response = None                 # callable(request) -> httpx.Response
+        self.answer_bodies: list[dict] = []
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -83,9 +88,14 @@ class StubFabric:
         if path == "/api/runs":
             return httpx.Response(200, json={"session_id": RUN})
         if path == f"/api/runs/{RUN}/pursue":
-            return httpx.Response(200, json={"paused": True, "decision": "denied"})
+            return httpx.Response(200, json=self.pursued)
         if path == f"/api/runs/{RUN}/pending-signoff":
             return httpx.Response(200, json={"gates": []})
+        if path == f"/api/runs/{RUN}/pending-input":
+            return httpx.Response(200, json={"session_id": RUN, "gates": self.input_gates})
+        if path == f"/api/runs/{RUN}/input":
+            self.answer_bodies.append(json.loads(request.content))
+            return self.answer_response(request)
         if path == f"/api/runs/{RUN}/chain":
             return httpx.Response(200, json={"envelopes": []})
         if path == "/api/sessions":
@@ -188,3 +198,91 @@ def test_no_view_leaves_the_work_item_payload_without_one(fabric, tmp_path, monk
     fabric(_undeclared)
     data = _finished_item(tmp_path, monkeypatch, _route())
     assert "view" not in data
+
+
+# --- OW-F-018: the parked run (input gate v1.0.0, fabric CONTRACTS.md §15) --------------------
+
+# The pending-input read's one gate, exactly as Studio serves it (§15, bundle v1.1.0 `pending_input`).
+GATE = {"from": "step_therapy", "to": "criteria",
+        "fields": [{"name": "clinical_notes", "type": "str"},
+                   {"name": "requested_units", "type": "int"}]}
+PARKED = {"paused": True, "awaiting_input": True, "session_id": RUN,
+          "detail": "awaiting input", "gates": [GATE]}
+
+
+def _parked(stub):
+    stub.pursued = PARKED
+    stub.input_gates = [GATE]
+    return stub
+
+
+@pytest.mark.parametrize("drive", [_route, _resume], ids=["dispatch", "resume"])
+def test_a_run_parked_on_input_mirrors_awaiting_input_beside_awaiting_signoff(fabric, drive):
+    _parked(fabric(_undeclared))
+    result = drive()
+    assert result["awaiting_input"] is True
+    assert result["pending_input"] == GATE
+    assert result["awaiting_signoff"] is False
+    assert result["gates"] == []
+    assert result["decision"] is None
+
+
+ANSWERS = {"clinical_notes": "Six weeks of physical therapy failed.", "requested_units": 1}
+
+
+def _answered(request):
+    return httpx.Response(200, json={"session_id": RUN, "answered": GATE, "paused": False,
+                                     "decision": "approved", "final_state": "approved"})
+
+
+def _idempotent(request):
+    return httpx.Response(200, json={"session_id": RUN, "answered": GATE, "idempotent": True,
+                                     "state": "approved"})
+
+
+def _answer():
+    return CapabilityRouter(learn=False).answer_input(RUN, dict(ANSWERS), agent=AGENT)
+
+
+@pytest.mark.parametrize("answer_response", [_answered, _idempotent],
+                         ids=["answered", "idempotent-repost"])
+def test_answering_posts_the_answers_to_the_studio_input_endpoint_and_reads_the_next_stop(
+        fabric, answer_response):
+    stub = fabric(_undeclared)
+    stub.answer_response = answer_response
+    result = _answer()
+    assert stub.answer_bodies == [{"answers": ANSWERS}]
+    assert result["awaiting_input"] is False
+    assert result["pending_input"] is None
+    assert result["awaiting_signoff"] is False
+    assert result["plan"]["signoff"] == "part11_single"
+
+
+def test_answering_returns_another_input_gate_when_the_run_parks_again(fabric):
+    stub = fabric(_undeclared)
+    stub.input_gates = [GATE]
+    stub.answer_response = lambda request: httpx.Response(200, json=PARKED)
+    result = _answer()
+    assert result["awaiting_input"] is True
+    assert result["pending_input"] == GATE
+    assert result["decision"] is None
+
+
+def _refused(status, detail):
+    return lambda request: httpx.Response(status, json={"detail": detail})
+
+
+@pytest.mark.parametrize("status,detail", [
+    (422, "answers refused, nothing sealed: field 'requested_units' must be int"),
+    (409, "the gate already sealed different answers; the first answers stand"),
+    (404, "unknown session"),
+], ids=["mistyped-422", "different-repost-409", "unknown-404"])
+def test_a_refused_answer_is_terminal_and_never_retried(fabric, status, detail):
+    stub = fabric(_undeclared)
+    stub.answer_response = _refused(status, detail)
+    with pytest.raises(router_module.FabricRefusal) as refused:
+        _answer()
+    assert refused.value.status == status
+    assert refused.value.detail == detail
+    assert refused.value.retryable is False
+    assert stub.calls.count(f"POST /api/runs/{RUN}/input") == 1
