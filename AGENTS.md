@@ -25,7 +25,8 @@ cd surfaces/gui && npm run build                # tsc + vite build (the UI gate)
 cd surfaces/gui && npm run test                 # vitest run
 cd surfaces/gui && npx playwright test          # e2e (needs the sidecar + GUI running)
 ```
-Sidecar: `COWORKER_API_TOKEN=<key> .venv/bin/python -m coworker.server.run --port 8765`
+Sidecar: `COWORKER_API_TOKEN=<key> REGAGENTIC_FABRIC_USERNAME=<user> REGAGENTIC_FABRIC_PASSWORD=<password> .venv/bin/python -m coworker.server.run --port 8765`
+(no fabric identity is built in: without both variables, dispatch and signing refuse before contacting fabric)
 GUI: `cd surfaces/gui && npm run dev -- --port <PORT>`
 
 **No `--timeout` flag**: pytest-timeout is not installed.
