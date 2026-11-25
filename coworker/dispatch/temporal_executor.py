@@ -12,6 +12,7 @@ drive the same product code:
   execute_work_item  CapabilityRouter.resume (looks before pursuing — idempotent under retry)
                      + channel_run_finish / channel_run_fail
   check_signoff      reads the inbox item (the Signal-lost fallback)
+  check_input        reads the inbox item's next stop after its input gate (OW-F-018)
   sign_work_item     SessionManager.sign_channel_item (freeze → digest post → signoff),
                      record_signature, record_steps — the F-012 path, unchanged
   emit_receipt       SessionManager.deliver_receipt (derive-at-read + keyed egress: exactly one
@@ -140,6 +141,7 @@ class _Activities:
             return self._refused(inbox_id, exc)
         self.manager.channel_run_finish(inbox_id, result, job["session_id"])
         return {"framed": True, "awaiting_signoff": bool(result.get("awaiting_signoff")),
+                "awaiting_input": bool(result.get("awaiting_input")),
                 "decision": result.get("decision"),
                 "fabric_run": job["fabric_run"], "agent": job["agent"]}
 
@@ -153,6 +155,18 @@ class _Activities:
                     and (item.resolution or "") in ("deny", "denied", "reject", "rejected"))
         return {"signed": bool(sig), "approver": sig.get("approver"),
                 "rejected": rejected, "by": item.resolution or ""}
+
+    def check_input(self, inbox_id: str) -> dict:
+        """Where the item's run stopped after its input gate (OW-F-018): status values only.
+
+        The sidecar's answer submit already published the next stop on the item; the gate's
+        fields and the answers never enter the workflow history or the dispatch chain.
+        """
+        item = self.manager.inbox.get(inbox_id)
+        data = (item.data or {}) if item is not None else {}
+        return {"awaiting_input": bool(data.get("awaiting_input")),
+                "awaiting_signoff": bool(data.get("awaiting_signoff")),
+                "decision": data.get("decision")}
 
     def sign_work_item(self, inbox_id: str, approver: str) -> dict:
         item = self.manager.inbox.get(inbox_id)
@@ -200,6 +214,10 @@ class _Activities:
     def check_signoff_activity(self, inbox_id: str) -> dict:
         return self._govern("ow.check_signoff", inbox_id)
 
+    @activity.defn(name="check_input")
+    def check_input_activity(self, inbox_id: str) -> dict:
+        return self._govern("ow.check_input", inbox_id)
+
     @activity.defn(name="sign_work_item")
     def sign_activity(self, inbox_id: str, approver: str) -> dict:
         return self._govern("ow.sign_work_item", inbox_id, approver=approver)
@@ -214,7 +232,8 @@ class _Activities:
 
     def all(self) -> list:
         return [self.frame_activity, self.execute_activity, self.check_signoff_activity,
-                self.sign_activity, self.emit_receipt_activity, self.learn_activity]
+                self.check_input_activity, self.sign_activity, self.emit_receipt_activity,
+                self.learn_activity]
 
 
 class TemporalExecutor:
@@ -302,6 +321,11 @@ class TemporalExecutor:
     def signal_rejected(self, inbox_id: str, by: str) -> None:
         handle = self._client.get_workflow_handle(workflow_id(inbox_id))
         self._call(handle.signal(WorkItemWorkflow.signoff_rejected, by))
+
+    def signal_input_answered(self, inbox_id: str) -> None:
+        """Wake the input wait. Carries nothing: the answers never enter workflow history."""
+        handle = self._client.get_workflow_handle(workflow_id(inbox_id))
+        self._call(handle.signal(WorkItemWorkflow.input_answered))
 
 
 _EXECUTOR: Optional[TemporalExecutor] = None

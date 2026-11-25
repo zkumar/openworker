@@ -34,6 +34,7 @@ def snapshot(manager) -> dict[str, Any]:
     items = list(manager.inbox._items.values())     # noqa: SLF001 — read-only snapshot
 
     pending_gates = 0
+    pending_inputs = 0
     stale_gates = 0
     stuck = 0
     by_decision: dict[str, int] = {}
@@ -52,6 +53,8 @@ def snapshot(manager) -> dict[str, Any]:
                 oldest_gate_age = age if oldest_gate_age is None else max(oldest_gate_age, age)
                 if age > STALE_GATE_SECONDS:
                     stale_gates += 1
+        if d.get("awaiting_input") and item.state == "pending":
+            pending_inputs += 1                     # OW-F-018: parked on an input gate
         decision = d.get("decision")
         if decision:
             by_decision[str(decision)] = by_decision.get(str(decision), 0) + 1
@@ -79,6 +82,7 @@ def snapshot(manager) -> dict[str, Any]:
         "runs": runs,
         "ingress": ingress,
         "items": {"total": len(items), "awaiting_signature": pending_gates,
+                  "awaiting_input": pending_inputs,
                   "oldest_gate_age_seconds": int(oldest_gate_age) if oldest_gate_age else None},
         "decisions": by_decision,
         "alerts": alerts,

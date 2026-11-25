@@ -85,3 +85,40 @@ def test_the_exclusion_is_stated_in_the_receipt():
     integrity = seal_receipt(_body())[INTEGRITY_KEY]
     assert set(integrity["signed_body_excludes"]) == {"signature", "sealed", "status",
                                                       "awaiting_signoff"}
+
+
+# OW-F-018 — a run parked on an input gate (fabric §15) is a status value, nothing more.
+PARKED = {**DATA, "decision": None, "awaiting_input": True,
+          "pending_input": {"from": "intake", "to": "review",
+                            "fields": [{"name": "clinical_notes", "type": "str"}]}}
+
+
+def test_a_parked_run_derives_status_awaiting_input():
+    assert _body(data=PARKED)["status"] == "awaiting_input"
+
+
+def test_a_parked_run_adds_no_receipt_field_and_leaves_the_signed_body_byte_identical():
+    from coworker.receipts import canonical_bytes, signing_body
+
+    unparked = {k: v for k, v in PARKED.items() if k not in ("awaiting_input", "pending_input")}
+    assert set(_body(data=PARKED)) == set(_body(data=unparked))
+    assert (canonical_bytes(signing_body(_body(data=PARKED)))
+            == canonical_bytes(signing_body(_body(data=unparked))))
+    assert "clinical_notes" not in canonical_bytes(_body(data=PARKED)).decode()
+
+
+def test_the_observability_counter_counts_parked_runs_beside_the_signoff_one():
+    from types import SimpleNamespace
+
+    from coworker.observability import snapshot
+
+    def item(**data):
+        return SimpleNamespace(data=data, state="pending", created_at="")
+
+    items = {"1": item(awaiting_signoff=True), "2": item(awaiting_input=True),
+             "3": item(awaiting_input=True), "4": item(decision="approved")}
+    manager = SimpleNamespace(runs=SimpleNamespace(), inbox=SimpleNamespace(_items=items),
+                              ingress=SimpleNamespace(stats=lambda: {}))
+    counts = snapshot(manager)["items"]
+    assert counts["awaiting_signature"] == 1
+    assert counts["awaiting_input"] == 2
