@@ -350,6 +350,20 @@ def test_a_refused_answer_surfaces_the_detail_leaves_the_item_parked_and_is_not_
     assert manager.runs.get(inbox_id)["state"] == "gate"
 
 
+def test_another_tenants_key_gets_404_and_fabric_is_never_called(parked_item):
+    stub, manager, inbox_id, client = parked_item
+    stub.answer_response = _answered
+    manager.stamp_tenant(inbox_id, "acme")
+    other, _ = manager.keys.mint("globex", "tenant agent")
+    response = client.post(f"/v1/inbox/{inbox_id}/input", json={"answers": ANSWERS},
+                           headers={"X-OpenWorker-Token": other})
+    assert response.status_code == 404
+    assert f"POST /api/runs/{RUN}/input" not in stub.calls
+    data = manager.inbox.get(inbox_id).data
+    assert data["awaiting_input"] is True
+    assert data["pending_input"] == GATE
+
+
 @pytest.fixture
 def temporal_item(fabric, tmp_path, monkeypatch):
     """The Temporal executor's activities over one framed work item (no Temporal server)."""
