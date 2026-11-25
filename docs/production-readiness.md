@@ -37,7 +37,7 @@ running system; the evidence lives in `docs/loop-evidence/` and in the test suit
 | **Single-writer assumption** | WAL keeps the database consistent, but two processes editing the SAME item are last-write-wins. | Run one sidecar per state directory, or add per-item optimistic locking (version column + compare-and-set). |
 | **Connector to a real system of record** | A directory adapter exists; no claims/QMS/EDC SDK integration, no id mapping, no sync. | Implement a `RecordSource` for the customer's API and schedule a sync. |
 | **Alert delivery** | Alerts are computed and exposed; nothing pages anyone. | Scrape `/v1/metrics` and route `alerts` to the operator's channel. |
-| **Hard-coded demo settings** | The running instance uses `REGAGENTIC_STEP_DELAY=0.8` (pacing, for demos) and a fixed dev token. | Remove both in any real deployment; pacing is opt-in via the env var only. |
+| **Hard-coded demo settings** | The running instance uses `REGAGENTIC_STEP_DELAY=0.8` (pacing, for demos) and a fixed dev token. The fabric identity is not built in: it comes from `REGAGENTIC_FABRIC_USERNAME` and `REGAGENTIC_FABRIC_PASSWORD`, and dispatch and signing refuse when either is missing. | Remove both in any real deployment; pacing is opt-in via the env var only. Set the fabric identity to the deployment's own fabric account. |
 | **The harness as a second ledger** | Decisions are persisted here *and* in the domain system. Two sources of truth for a legally consequential outcome. | Decide ownership: harness emits, domain records — or make the harness the record and stop writing to the other. |
 | **Not merged** | 10 fabric PRs and 1 openworker PR are open. | Owner review and merge; nothing here is on main. |
 

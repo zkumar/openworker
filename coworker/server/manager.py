@@ -8268,6 +8268,12 @@ class SessionManager:
             raise ValueError(f"session {session_id!r} carries no fabric run to sign")
         import httpx
 
+        from coworker.dispatch.router import fabric_credentials
+
+        # OW-F-019: no configured fabric identity refuses here, before the freeze and before
+        # any request, so a refused signature leaves the item exactly as it was.
+        username, password = fabric_credentials()
+
         # F-012: freeze the signed body NOW. The signature will append the run's final sealed
         # step, so the bytes the human authorises must be snapshotted before anything mutates —
         # persisted on the item so emission (even after a restart) stays byte-identical to what
@@ -8284,7 +8290,7 @@ class SessionManager:
         fabric = os.environ.get("REGAGENTIC_FABRIC_URL", "http://127.0.0.1:8766")
         with httpx.Client(timeout=120) as client:
             token = client.post(f"{fabric}/api/auth/login",
-                                json={"username": "dr.md", "password": "test"}).json()["access_token"]
+                                json={"username": username, "password": password}).json()["access_token"]
             # F-012 t02: tell the fabric what the human is about to authorise, BEFORE they sign
             # (fabric receipt-digest v1.0.0 — CONTRACTS.md §11, RFC 0053). A separate call on
             # purpose: the signoff endpoint keeps its zero body, since a signoff that could name

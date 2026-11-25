@@ -1,6 +1,7 @@
 """A3b — the harness's capability router: pure match, then the governed loop."""
 
 import json
+import os
 import urllib.request
 
 import httpx
@@ -30,7 +31,13 @@ def _fabric_up() -> bool:
         return False
 
 
-@pytest.mark.skipif(not _fabric_up(), reason="no fabric at :8766")
+def _fabric_live() -> bool:
+    """A live fabric and a configured identity: without one the harness refuses by design."""
+    return _fabric_up() and all(os.environ.get(name, "").strip() for name in
+                                ("REGAGENTIC_FABRIC_USERNAME", "REGAGENTIC_FABRIC_PASSWORD"))
+
+
+@pytest.mark.skipif(not _fabric_live(), reason="no fabric at :8766 or no fabric credentials")
 def test_route_executes_the_governed_run_and_seals():
     result = CapabilityRouter(learn=False).route({
         "request_id": "PA-2026-001",
@@ -72,6 +79,8 @@ class StubFabric:
         self.input_gates: list[dict] = []           # OW-F-018: the pending-input read's gates
         self.answer_response = None                 # callable(request) -> httpx.Response
         self.answer_bodies: list[dict] = []
+        self.logins: list[dict] = []                # OW-F-019: every login body, as sent
+        self.login_response = None                  # callable(request) -> httpx.Response
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -79,6 +88,9 @@ class StubFabric:
         if path == VIEW_PATH:
             return self.view_response(request)
         if path == "/api/auth/login":
+            self.logins.append(json.loads(request.content))
+            if self.login_response is not None:
+                return self.login_response(request)
             return httpx.Response(200, json={"access_token": "t"})
         if path == "/api/capabilities":
             return httpx.Response(200, json={"capabilities": [
@@ -96,6 +108,10 @@ class StubFabric:
         if path == f"/api/runs/{RUN}/input":
             self.answer_bodies.append(json.loads(request.content))
             return self.answer_response(request)
+        if path == f"/api/runs/{RUN}/receipt-digest":
+            return httpx.Response(200, json={"recorded": True})
+        if path == f"/api/runs/{RUN}/signoff":
+            return httpx.Response(200, json={"session_id": RUN, "signed": True})
         if path == f"/api/runs/{RUN}/chain":
             return httpx.Response(200, json={"envelopes": []})
         if path == "/api/sessions":
@@ -106,8 +122,14 @@ class StubFabric:
         return self.calls.count(f"GET {VIEW_PATH}")
 
 
+FABRIC_USER, FABRIC_PASSWORD = "harness.operator", "configured-secret"
+
+
 @pytest.fixture
 def fabric(monkeypatch):
+    monkeypatch.setenv("REGAGENTIC_FABRIC_USERNAME", FABRIC_USER)
+    monkeypatch.setenv("REGAGENTIC_FABRIC_PASSWORD", FABRIC_PASSWORD)
+
     def install(view_response):
         stub = StubFabric(view_response)
         real_client = httpx.Client
@@ -426,3 +448,92 @@ def test_the_durable_input_check_reads_the_items_next_stop(temporal_item, tmp_pa
     assert state["awaiting_input"] is False
     assert state["awaiting_signoff"] is False
     assert state["decision"] == "approved"
+
+
+# --- OW-F-019: the fabric identity comes from configuration, fail closed -----------------------
+
+def test_login_uses_the_configured_fabric_identity(fabric):
+    stub = fabric(_undeclared)
+    _route()
+    assert stub.logins == [{"username": FABRIC_USER, "password": FABRIC_PASSWORD}]
+
+
+MISSING = pytest.mark.parametrize("unset", [
+    {"REGAGENTIC_FABRIC_USERNAME": None},
+    {"REGAGENTIC_FABRIC_PASSWORD": None},
+    {"REGAGENTIC_FABRIC_USERNAME": "", "REGAGENTIC_FABRIC_PASSWORD": "  "},
+], ids=["username-missing", "password-missing", "both-empty"])
+
+
+def _configure(monkeypatch, unset):
+    for name, value in unset.items():
+        if value is None:
+            monkeypatch.delenv(name)
+        else:
+            monkeypatch.setenv(name, value)
+
+
+@MISSING
+def test_missing_fabric_credentials_refuse_dispatch(fabric, monkeypatch, unset):
+    stub = fabric(_undeclared)
+    _configure(monkeypatch, unset)
+    with pytest.raises(router_module.FabricRefusal) as refused:
+        _route()
+    assert "REGAGENTIC_FABRIC_USERNAME" in refused.value.detail
+    assert "REGAGENTIC_FABRIC_PASSWORD" in refused.value.detail
+    assert stub.calls == []
+
+
+@pytest.fixture
+def signoff_item(fabric, tmp_path, monkeypatch):
+    """A sidecar holding one work item whose run is parked at the signoff gate."""
+    stub = fabric(_undeclared)
+    manager, inbox_id = _finished(tmp_path, monkeypatch, _route())
+    stub.calls.clear()
+    stub.logins.clear()
+    return stub, manager, inbox_id
+
+
+def test_signing_logs_in_with_the_configured_fabric_identity(signoff_item):
+    stub, manager, inbox_id = signoff_item
+    manager.sign_channel_item(manager.inbox.get(inbox_id).session_id)
+    assert stub.logins == [{"username": FABRIC_USER, "password": FABRIC_PASSWORD}]
+    assert f"POST /api/runs/{RUN}/signoff" in stub.calls
+
+
+@MISSING
+def test_missing_fabric_credentials_refuse_signing(signoff_item, monkeypatch, unset):
+    from coworker.receipts import SIGNED_BODY_KEY
+
+    stub, manager, inbox_id = signoff_item
+    _configure(monkeypatch, unset)
+    with pytest.raises(router_module.FabricRefusal):
+        manager.sign_channel_item(manager.inbox.get(inbox_id).session_id)
+    assert stub.calls == []
+    data = manager.inbox.get(inbox_id).data
+    assert SIGNED_BODY_KEY not in data
+    assert "receipt_digest_recorded" not in data
+
+
+SENTINEL = "sentinel-password-4f9c"
+
+
+def test_credential_values_never_leak(fabric, monkeypatch, caplog):
+    import logging
+
+    caplog.set_level(logging.DEBUG)
+    stub = fabric(_undeclared)
+    monkeypatch.setenv("REGAGENTIC_FABRIC_PASSWORD", SENTINEL)
+    monkeypatch.delenv("REGAGENTIC_FABRIC_USERNAME")
+    with pytest.raises(router_module.FabricRefusal) as missing:
+        CapabilityRouter(learn=False).frame(dict(ITEM))
+    monkeypatch.setenv("REGAGENTIC_FABRIC_USERNAME", FABRIC_USER)
+    stub.login_response = _refused(401, "invalid username or password")
+    with pytest.raises(router_module.FabricRefusal) as rejected:
+        CapabilityRouter(learn=False).frame(dict(ITEM))
+    assert rejected.value.status == 401
+    assert stub.logins == [{"username": FABRIC_USER, "password": SENTINEL}], "the 401 path ran"
+    assert SENTINEL not in missing.value.detail
+    assert SENTINEL not in rejected.value.detail
+    assert caplog.records, "the stubbed fabric calls were logged"
+    assert all(SENTINEL not in record.getMessage() for record in caplog.records)

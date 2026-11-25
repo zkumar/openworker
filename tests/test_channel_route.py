@@ -1,5 +1,6 @@
 """A3b wiring — a channel POST becomes a governed run and a lesson."""
 
+import os
 import urllib.request
 
 import pytest
@@ -15,6 +16,12 @@ def _fabric_up() -> bool:
         return True
     except Exception:
         return False
+
+
+def _fabric_live() -> bool:
+    """A live fabric and a configured identity: without one the harness refuses by design."""
+    return _fabric_up() and all(os.environ.get(name, "").strip() for name in
+                                ("REGAGENTIC_FABRIC_USERNAME", "REGAGENTIC_FABRIC_PASSWORD"))
 
 
 @pytest.fixture()
@@ -47,7 +54,7 @@ def _wait_for_run(client, session_id, timeout=25.0):
     raise AssertionError("run did not finish in time")
 
 
-@pytest.mark.skipif(not _fabric_up(), reason="no fabric at :8766")
+@pytest.mark.skipif(not _fabric_live(), reason="no fabric at :8766 or no fabric credentials")
 def test_approving_the_inbox_item_signs_the_governed_run(client):
     body = client.post("/v1/channels/webhook", json={"record": {
         "request_id": "PA-2026-001",
@@ -68,7 +75,7 @@ def test_approving_the_inbox_item_signs_the_governed_run(client):
         "the signature completes the run"
 
 
-@pytest.mark.skipif(not _fabric_up(), reason="no fabric at :8766")
+@pytest.mark.skipif(not _fabric_live(), reason="no fabric at :8766 or no fabric credentials")
 def test_webhook_record_is_dispatched_and_sealed(client):
     response = client.post("/v1/channels/webhook", json={"record": {
         "member_id": "MEM001", "procedure_code": "27447", "provider_npi": "1234567890",
