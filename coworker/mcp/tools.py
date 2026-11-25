@@ -43,8 +43,18 @@ def _openai_schema(name: str, mcp_tool: Any) -> dict[str, Any]:
     }
 
 
+def _app_only(mcp_tool: Any) -> bool:
+    """True when the listing meta marks the tool callable by a view only (MCP Apps)."""
+    meta = getattr(mcp_tool, "meta", None) or {}
+    ui = meta.get("ui") if isinstance(meta, dict) else None
+    return isinstance(ui, dict) and ui.get("visibility") == "app"
+
+
 def _filtered(mcp_tools: list[Any], server: MCPServerDef) -> list[Any]:
-    out = mcp_tools
+    # OW-F-018: an app-only tool (the input gate's answer tool) never reaches the agent,
+    # whatever include_tools says: the connector-backed rebuild or a hand-edited config
+    # may name it, so this drop comes first and is unconditional.
+    out = [t for t in mcp_tools if not _app_only(t)]
     if server.include_tools is not None:
         allow = set(server.include_tools)
         out = [t for t in out if t.name in allow]

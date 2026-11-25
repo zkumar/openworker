@@ -85,3 +85,41 @@ def test_destination_stamp_travels_with_every_callable():
     stdio_server = MCPServerDef(name="localfs", transport="stdio", command="npx")
     (fn2,) = _build(stdio_server, ["read"])
     assert fn2.__coworker_mcp_destination__ == {"transport": "stdio", "host": ""}
+
+
+def test_trap_an_app_only_tool_never_becomes_an_agent_callable():
+    # OW-F-018: the answer tool is meta-marked app-only (only a view may call it). The
+    # connector-backed rebuild or a hand-edited config may still name it in
+    # include_tools; it must be dropped anyway, so an agent can never answer its own gate.
+    from mcp.types import Tool
+
+    listed = [
+        Tool(
+            name="regagent_answer_input",
+            description="answer a parked run's input gate",
+            inputSchema={"type": "object", "properties": {}},
+            _meta={"ui": {"visibility": "app", "resourceUri": "ui://work-item"}},
+        ),
+        Tool(
+            name="regagent_get_work_item",
+            description="read a work item",
+            inputSchema={"type": "object", "properties": {}},
+            _meta={"ui": {"resourceUri": "ui://work-item"}},
+        ),
+    ]
+    for include in (["regagent_answer_input", "regagent_get_work_item"], None):
+        server = MCPServerDef(
+            name="regagent",
+            transport="stdio",
+            command="regagent-gateway",
+            include_tools=include,
+        )
+        loop = asyncio.new_event_loop()
+        try:
+            names = [
+                fn.__name__
+                for fn in build_callables(server, listed, lambda t, a: None, loop)
+            ]
+        finally:
+            loop.close()
+        assert names == ["mcp__regagent__regagent_get_work_item"]
