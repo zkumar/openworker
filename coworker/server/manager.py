@@ -8092,14 +8092,19 @@ class SessionManager:
             # (its title) and in the panel, so nothing here claims a stale status.
             self.session_store.save(record)
 
-    def answer_channel_input(self, item_id: str, answers: dict[str, Any]) -> dict[str, Any]:
+    def answer_channel_input(self, item_id: str, answers: dict[str, Any],
+                             by: str = "") -> dict[str, Any]:
         """Answer the input gate a channel item's run is parked at, then publish its next stop.
 
         OW-F-018: the dispatcher posts Studio's input endpoint as the authenticated principal
         (fabric §15); fabric validates, seals the answers and resumes. A FabricRefusal propagates
         untouched and leaves the item parked: a refusal is never retried. The answers are
-        neither stored on the item nor logged; fabric's chain is their only home.
+        neither stored on the item nor logged; fabric's chain is their only home. Fabric seals
+        the dispatcher's principal as `answered_by`, so the item records who answered (`by`,
+        never the answers), as the signature gate records its approver.
         """
+        from datetime import datetime as _now
+
         from coworker.dispatch import CapabilityRouter
 
         item = self.inbox.get(item_id)
@@ -8108,6 +8113,10 @@ class SessionManager:
             raise ValueError(f"work item {item_id!r} carries no fabric run to answer")
         result = CapabilityRouter().answer_input(fabric_run, answers,
                                                  agent=(item.data or {}).get("agent"))
+        answered = {"actor": by or "a human", "at": _now.now().strftime("%Y-%m-%d %H:%M")}
+        item.data = {**(item.data or {}),
+                     "input_answered_by": [*((item.data or {}).get("input_answered_by") or []),
+                                           answered]}
         self.channel_run_finish(item_id, result, item.session_id)
         return result
 

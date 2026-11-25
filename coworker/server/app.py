@@ -578,7 +578,8 @@ def create_app(manager: SessionManager) -> FastAPI:
         if not isinstance(answers, dict):
             raise HTTPException(status_code=422, detail="answers must be an object of field values")
         try:
-            result = manager.answer_channel_input(item_id, answers)
+            result = manager.answer_channel_input(
+                item_id, answers, by=request.headers.get("x-openworker-actor", ""))
         except FabricRefusal as exc:
             status = exc.status if 400 <= exc.status < 500 else 502
             raise HTTPException(status_code=status, detail=exc.detail) from exc

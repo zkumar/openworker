@@ -364,6 +364,27 @@ def test_another_tenants_key_gets_404_and_fabric_is_never_called(parked_item):
     assert data["pending_input"] == GATE
 
 
+def test_the_answering_actor_is_recorded_on_the_item_and_the_answers_are_not(parked_item):
+    stub, manager, inbox_id, client = parked_item
+    stub.input_gates = []
+    stub.answer_response = _answered
+    response = client.post(f"/v1/inbox/{inbox_id}/input", json={"answers": ANSWERS},
+                           headers={"x-openworker-actor": "dr.reviewer"})
+    assert response.status_code == 200
+    data = manager.inbox.get(inbox_id).data
+    assert [a["actor"] for a in data["input_answered_by"]] == ["dr.reviewer"]
+    assert set(data["input_answered_by"][0]) == {"actor", "at"}
+    assert ANSWERS["clinical_notes"] not in json.dumps(data)
+
+
+def test_a_refused_answer_records_no_answering_actor(parked_item):
+    stub, manager, inbox_id, client = parked_item
+    stub.answer_response = _refused(422, "answers refused, nothing sealed")
+    client.post(f"/v1/inbox/{inbox_id}/input", json={"answers": ANSWERS},
+                headers={"x-openworker-actor": "dr.reviewer"})
+    assert "input_answered_by" not in manager.inbox.get(inbox_id).data
+
+
 @pytest.fixture
 def temporal_item(fabric, tmp_path, monkeypatch):
     """The Temporal executor's activities over one framed work item (no Temporal server)."""
