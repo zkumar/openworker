@@ -30,11 +30,26 @@ class FabricRefusal(Exception):
         self.retryable = status == 0 or status >= 500
 
 
+def fabric_credentials(username: Optional[str] = None,
+                       password: Optional[str] = None) -> tuple[str, str]:
+    """The fabric identity the harness logs in as: explicit values, else the sidecar environment.
+
+    No default: unset, empty or blank refuses before any fabric request (status 0, so an accepted
+    record is retryable once the operator sets it). The detail names the settings, never a value.
+    """
+    username = username or os.environ.get("REGAGENTIC_FABRIC_USERNAME", "")
+    password = password or os.environ.get("REGAGENTIC_FABRIC_PASSWORD", "")
+    if not username.strip() or not password.strip():
+        raise FabricRefusal("fabric credentials not configured: set REGAGENTIC_FABRIC_USERNAME "
+                            "and REGAGENTIC_FABRIC_PASSWORD", 0)
+    return username, password
+
+
 class CapabilityRouter:
     """The harness half of `frame → capability → execute → learn`."""
 
-    def __init__(self, *, base: str = FABRIC, username: str = "dr.md", password: str = "test",
-                 learn: bool = True) -> None:
+    def __init__(self, *, base: str = FABRIC, username: Optional[str] = None,
+                 password: Optional[str] = None, learn: bool = True) -> None:
         self._base = base.rstrip("/")
         self._username, self._password = username, password
         self._learn = learn
@@ -43,9 +58,10 @@ class CapabilityRouter:
     # --- fabric contracts -----------------------------------------------------
     def _headers(self) -> dict[str, str]:
         if self._token is None:
+            username, password = fabric_credentials(self._username, self._password)
             with httpx.Client(timeout=10) as client:
                 response = client.post(f"{self._base}/api/auth/login",
-                                       json={"username": self._username, "password": self._password})
+                                       json={"username": username, "password": password})
                 response.raise_for_status()
                 self._token = response.json()["access_token"]
         return {"Authorization": f"Bearer {self._token}"}

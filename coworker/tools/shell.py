@@ -35,11 +35,15 @@ from ..sandbox.runner.executor import (
 from ..sandbox.runner.executor import Executor as Executor
 from ..sandbox.runner.executor import LocalExecutor as _StdlibLocalExecutor
 
-_SIDECAR_ENV_VARS = ("COWORKER_API_TOKEN",)
+_SIDECAR_ENV_VARS = (
+    "COWORKER_API_TOKEN",
+    "REGAGENTIC_FABRIC_USERNAME",
+    "REGAGENTIC_FABRIC_PASSWORD",
+)
 
 
 def _shell_base_env() -> dict[str, str]:
-    """The parent environment without OpenWorker's own API credential."""
+    """The parent environment without OpenWorker's own API and fabric credentials."""
     return {k: v for k, v in os.environ.items() if k not in _SIDECAR_ENV_VARS}
 
 
