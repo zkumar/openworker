@@ -412,7 +412,13 @@ def temporal_item(fabric, tmp_path, monkeypatch):
     """The Temporal executor's activities over one framed work item (no Temporal server)."""
     from types import SimpleNamespace
 
-    temporal_executor = pytest.importorskip("coworker.dispatch.temporal_executor")
+    try:
+        from coworker.dispatch import temporal_executor
+    except RuntimeError:   # the module fails closed without the extra; importorskip cannot see it
+        if os.environ.get("OPENWORKER_EXECUTOR", "").strip().lower() == "temporal":
+            pytest.fail("OPENWORKER_EXECUTOR=temporal is set but the temporal extra is not "
+                        "installed — install it; this must never skip silently")
+        pytest.skip("the temporal extra (openworker[temporal]) is not installed")
     from coworker.server.manager import SessionManager
 
     stub = fabric(_undeclared)

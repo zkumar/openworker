@@ -14,6 +14,10 @@ async function clearRailPref(page: import("@playwright/test").Page) {
 }
 
 test("rail is hidden by default; the toggle persists across restarts", async ({ page }) => {
+  test.fixme(
+    true,
+    "Quarantined (OW-F-020): ffba17c made the rail visible by default, so this test's hidden-by-default premise is stale, and its probe (rail-toggle-artifacts) no longer shows whether the rail is open. Which default to pin is the owner's call.",
+  );
   await clearRailPref(page);
   await expect(page.getByTestId("rail-toggle-artifacts")).toHaveCount(0);
 

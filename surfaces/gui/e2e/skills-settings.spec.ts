@@ -27,7 +27,7 @@ test("skills-settings: create via the menu → name-first banner; edit persists"
   await expect(page.getByText("Create with OpenWorker")).toBeVisible();
   await page.getByText("Write it myself").click();
 
-  await page.getByLabel("Name").fill("greet-warmly");
+  await page.getByLabel("Name", { exact: true }).fill("greet-warmly");
   await page.getByLabel("Description").fill("Greets people warmly");
   await page.getByLabel("Instructions").fill("Always greet warmly.");
   await page.getByRole("button", { name: "Save skill" }).click();
@@ -40,7 +40,7 @@ test("skills-settings: create via the menu → name-first banner; edit persists"
 
   // Edit: pencil prefills, name locked, save PATCHes through to the re-fetched list.
   await page.getByTitle("Edit").first().click();
-  const name = page.getByLabel("Name");
+  const name = page.getByLabel("Name", { exact: true });
   await expect(name).toBeDisabled();
   await page.getByLabel("Description").fill("Monday status report, sharper");
   await page.getByRole("button", { name: "Save skill" }).click();

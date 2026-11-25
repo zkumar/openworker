@@ -58,10 +58,9 @@ test("team icon, task chip, worker message and all three tabs work together", as
   await page
     .getByRole("button", { name: "Team quick look", exact: true })
     .click();
-  await expect(
-    page.getByRole("region", { name: "Team quick look" }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Open team view" }).click();
+  const quick = page.getByRole("region", { name: "Team quick look" });
+  await expect(quick).toBeVisible();
+  await quick.getByRole("button", { name: "Open team view" }).click();
   const pane = page.getByTestId("team-view");
   await expect(pane).toBeVisible();
   await expect(pane.getByText("1 task is waiting on you.")).toBeVisible();
