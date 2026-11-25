@@ -348,3 +348,46 @@ def test_a_refused_answer_surfaces_the_detail_leaves_the_item_parked_and_is_not_
     assert data["awaiting_input"] is True
     assert data["pending_input"] == GATE
     assert manager.runs.get(inbox_id)["state"] == "gate"
+
+
+@pytest.fixture
+def temporal_item(fabric, tmp_path, monkeypatch):
+    """The Temporal executor's activities over one framed work item (no Temporal server)."""
+    from types import SimpleNamespace
+
+    temporal_executor = pytest.importorskip("coworker.dispatch.temporal_executor")
+    from coworker.server.manager import SessionManager
+
+    stub = fabric(_undeclared)
+    manager = SessionManager(workspace=tmp_path)
+    monkeypatch.setattr(manager, "deliver_receipt", lambda item_id: [])
+    _, inbox_id = manager.channel_run_start(SimpleNamespace(channel="fhir", record=dict(ITEM)))
+    manager.stamp_tenant(inbox_id, "acme")
+    manager.channel_set_run(inbox_id, RUN, AGENT)
+    activities = temporal_executor._Activities(manager)
+    return stub, manager, inbox_id, activities
+
+
+def test_the_durable_execute_stage_mirrors_a_run_parked_on_input(temporal_item):
+    stub, manager, inbox_id, activities = temporal_item
+    _parked(stub)
+    result = activities.governed.run("ow.execute_work_item", inbox_id, "acme")
+    assert result["awaiting_input"] is True
+    assert result["awaiting_signoff"] is False
+    assert "fabric_anchor" not in result, "a parked run is not terminal: nothing to anchor"
+    assert "pending_input" not in result, "the gate's fields never enter the dispatch chain"
+    assert manager.inbox.get(inbox_id).data["pending_input"] == GATE
+
+
+def test_the_durable_input_check_reads_the_items_next_stop(temporal_item, tmp_path, monkeypatch):
+    stub, manager, inbox_id, activities = temporal_item
+    _parked(stub)
+    activities.governed.run("ow.execute_work_item", inbox_id, "acme")
+    assert activities.check_input(inbox_id)["awaiting_input"] is True
+    stub.input_gates = []
+    stub.answer_response = _answered
+    manager.answer_channel_input(inbox_id, dict(ANSWERS))
+    state = activities.check_input(inbox_id)
+    assert state["awaiting_input"] is False
+    assert state["awaiting_signoff"] is False
+    assert state["decision"] == "approved"

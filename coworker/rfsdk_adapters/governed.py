@@ -112,7 +112,7 @@ def view_sha256(inbox_id: str) -> str | None:
 
 
 def _register_actions() -> None:
-    """Register the six stages once per process (the registry is module-global)."""
+    """Register the seven stages once per process (the registry is module-global)."""
     if get_action("ow.frame_work_item") is not None:
         return
 
@@ -128,7 +128,7 @@ def _register_actions() -> None:
     async def _execute(args: StageInput) -> StageResult:
         result = _activities().execute_work_item(args.inbox_id)
         if (not result.get("failed") and not result.get("awaiting_signoff")
-                and result.get("fabric_run")):
+                and not result.get("awaiting_input") and result.get("fabric_run")):
             result["fabric_anchor"] = read_fabric_anchor(result["fabric_run"])
             result["view_sha256"] = view_sha256(args.inbox_id)
         return StageResult(**result)
@@ -138,6 +138,19 @@ def _register_actions() -> None:
             read_only=True)
     async def _check(args: StageInput) -> StageResult:
         return StageResult(**_activities().check_signoff(args.inbox_id))
+
+    @action(name="ow.check_input", input_schema=StageInput, output_schema=StageResult,
+            description="read the inbox item's next stop after its input gate; a run the "
+                        "answer made terminal seals the fabric anchor (dispatch-anchor v1.0.0) "
+                        "and view_sha256")
+    async def _check_input(args: StageInput) -> StageResult:
+        result = _activities().check_input(args.inbox_id)
+        job = _activities().manager.runs.get(args.inbox_id) or {}
+        if (not result["awaiting_input"] and not result["awaiting_signoff"]
+                and job.get("fabric_run")):
+            result["fabric_anchor"] = read_fabric_anchor(job["fabric_run"])
+            result["view_sha256"] = view_sha256(args.inbox_id)
+        return StageResult(**result)
 
     @action(name="ow.sign_work_item", input_schema=SignInput, output_schema=StageResult,
             description="complete the human gate through the F-012 freeze-and-digest path; "
