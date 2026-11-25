@@ -31,10 +31,31 @@ would normalise a broken signal.
 ```bash
 ./.venv/bin/python -m pytest tests/test_channel_route.py tests/test_channels.py \
   tests/test_dispatch_router.py tests/test_ingress.py tests/test_receipt_integrity.py \
-  tests/test_receipt_verification.py tests/test_runstore.py tests/test_keys.py -q
+  tests/test_receipt_verification.py tests/test_runstore.py tests/test_keys.py \
+  tests/test_receipt_body.py tests/test_mcp_tool_selection.py \
+  tests/test_shell_env_isolation.py tests/test_temporal_optin.py -q
 cd surfaces/gui && npm run build
 ```
-These are the tests that cover this product's work (36 tests) plus the UI build.
+These are the test files that cover this product's work plus the UI build. The 12 files are
+the same list CI's `pytest-gate` job runs, so the local and CI gates do not drift.
+
+## CI (OW-F-020)
+`.github/workflows/ci.yml` splits the Python signal:
+- **`pytest-gate` blocks.** It runs exactly the 12 files of the local gate above. A red gate
+  means a real regression in the product's tests. The fabric-dependent tests in
+  `test_channel_route.py` and `test_dispatch_router.py` skip there (no fabric at :8766 in CI).
+- **`pytest-full` does not block.** It runs the whole suite (`pytest tests -q --cov=coworker`)
+  with job-level `continue-on-error: true` and still uploads the `coverage-report` artifact.
+  Its failures are the debt described below, **not expected results**: nothing is marked
+  xfail, skipped or deselected to make it pass. Read the job, not the workflow badge.
+- `gui-unit` and `gui-e2e` block as before.
+
+**Quarantined e2e test** (`test.fixme`, so it is reported as skipped with its reason):
+- `surfaces/gui/e2e/rail-default.spec.ts` "rail is hidden by default; the toggle persists
+  across restarts". ffba17c ("rail visible by default") changed the shipped default this test
+  pins (UX-038 owner ruling 2026-08-21: "starts hidden"), and its probe
+  (`rail-toggle-artifacts`) no longer shows whether the rail is open. Rewriting it needs the
+  owner to decide which default is right.
 
 ## Parked — external services this deployment does not use
 Named explicitly so nobody mistakes "parked" for "passing". Not counted in the local gate:
