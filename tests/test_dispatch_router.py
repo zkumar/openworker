@@ -72,6 +72,8 @@ class StubFabric:
         self.input_gates: list[dict] = []           # OW-F-018: the pending-input read's gates
         self.answer_response = None                 # callable(request) -> httpx.Response
         self.answer_bodies: list[dict] = []
+        self.logins: list[dict] = []                # OW-F-019: every login body, as sent
+        self.login_response = None                  # callable(request) -> httpx.Response
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -79,6 +81,9 @@ class StubFabric:
         if path == VIEW_PATH:
             return self.view_response(request)
         if path == "/api/auth/login":
+            self.logins.append(json.loads(request.content))
+            if self.login_response is not None:
+                return self.login_response(request)
             return httpx.Response(200, json={"access_token": "t"})
         if path == "/api/capabilities":
             return httpx.Response(200, json={"capabilities": [
@@ -106,8 +111,14 @@ class StubFabric:
         return self.calls.count(f"GET {VIEW_PATH}")
 
 
+FABRIC_USER, FABRIC_PASSWORD = "harness.operator", "configured-secret"
+
+
 @pytest.fixture
 def fabric(monkeypatch):
+    monkeypatch.setenv("REGAGENTIC_FABRIC_USERNAME", FABRIC_USER)
+    monkeypatch.setenv("REGAGENTIC_FABRIC_PASSWORD", FABRIC_PASSWORD)
+
     def install(view_response):
         stub = StubFabric(view_response)
         real_client = httpx.Client
@@ -426,3 +437,37 @@ def test_the_durable_input_check_reads_the_items_next_stop(temporal_item, tmp_pa
     assert state["awaiting_input"] is False
     assert state["awaiting_signoff"] is False
     assert state["decision"] == "approved"
+
+
+# --- OW-F-019: the fabric identity comes from configuration, fail closed -----------------------
+
+def test_login_uses_the_configured_fabric_identity(fabric):
+    stub = fabric(_undeclared)
+    _route()
+    assert stub.logins == [{"username": FABRIC_USER, "password": FABRIC_PASSWORD}]
+
+
+MISSING = pytest.mark.parametrize("unset", [
+    {"REGAGENTIC_FABRIC_USERNAME": None},
+    {"REGAGENTIC_FABRIC_PASSWORD": None},
+    {"REGAGENTIC_FABRIC_USERNAME": "", "REGAGENTIC_FABRIC_PASSWORD": "  "},
+], ids=["username-missing", "password-missing", "both-empty"])
+
+
+def _configure(monkeypatch, unset):
+    for name, value in unset.items():
+        if value is None:
+            monkeypatch.delenv(name)
+        else:
+            monkeypatch.setenv(name, value)
+
+
+@MISSING
+def test_missing_fabric_credentials_refuse_dispatch(fabric, monkeypatch, unset):
+    stub = fabric(_undeclared)
+    _configure(monkeypatch, unset)
+    with pytest.raises(router_module.FabricRefusal) as refused:
+        _route()
+    assert "REGAGENTIC_FABRIC_USERNAME" in refused.value.detail
+    assert "REGAGENTIC_FABRIC_PASSWORD" in refused.value.detail
+    assert stub.calls == []
