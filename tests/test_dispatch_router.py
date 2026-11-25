@@ -176,7 +176,7 @@ def test_no_view_stores_nothing_lets_the_run_proceed_and_is_not_retried(fabric, 
     assert stub.view_calls() == 1
 
 
-def _finished_item(tmp_path, monkeypatch, result):
+def _finished(tmp_path, monkeypatch, result):
     from types import SimpleNamespace
 
     from coworker.server.manager import SessionManager
@@ -185,6 +185,11 @@ def _finished_item(tmp_path, monkeypatch, result):
     monkeypatch.setattr(manager, "deliver_receipt", lambda item_id: [])
     _, inbox_id = manager.channel_run_start(SimpleNamespace(channel="fhir", record=dict(ITEM)))
     manager.channel_run_finish(inbox_id, result, "ch_session")
+    return manager, inbox_id
+
+
+def _finished_item(tmp_path, monkeypatch, result):
+    manager, inbox_id = _finished(tmp_path, monkeypatch, result)
     return manager.inbox.get(inbox_id).data
 
 
@@ -286,3 +291,60 @@ def test_a_refused_answer_is_terminal_and_never_retried(fabric, status, detail):
     assert refused.value.detail == detail
     assert refused.value.retryable is False
     assert stub.calls.count(f"POST /api/runs/{RUN}/input") == 1
+
+
+def test_a_run_parked_on_input_parks_the_work_item_beside_the_signoff_gate(fabric, tmp_path,
+                                                                           monkeypatch):
+    _parked(fabric(_undeclared))
+    manager, inbox_id = _finished(tmp_path, monkeypatch, _route())
+    data = manager.inbox.get(inbox_id).data
+    assert manager.runs.get(inbox_id)["state"] == "gate", "parked, not sealed and not retried"
+    assert data["awaiting_input"] is True
+    assert data["pending_input"] == GATE
+    assert data["awaiting_signoff"] is False
+    assert data["running"] is False
+
+
+@pytest.fixture
+def parked_item(fabric, tmp_path, monkeypatch):
+    """A sidecar holding one work item whose run is parked on GATE."""
+    from fastapi.testclient import TestClient
+
+    from coworker.server.app import create_app
+
+    stub = _parked(fabric(_undeclared))
+    manager, inbox_id = _finished(tmp_path, monkeypatch, _route())
+    monkeypatch.setenv("COWORKER_API_TOKEN", "test-token")
+    client = TestClient(create_app(manager))
+    client.headers.update({"X-OpenWorker-Token": "test-token"})
+    return stub, manager, inbox_id, client
+
+
+def test_answering_a_parked_item_posts_through_the_dispatcher_and_flips_it_to_the_next_stop(
+        parked_item):
+    stub, manager, inbox_id, client = parked_item
+    stub.input_gates = []
+    stub.answer_response = _answered
+    response = client.post(f"/v1/inbox/{inbox_id}/input", json={"answers": ANSWERS})
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert stub.answer_bodies == [{"answers": ANSWERS}]
+    data = manager.inbox.get(inbox_id).data
+    assert data["awaiting_input"] is False
+    assert data["pending_input"] is None
+    assert data["decision"] == "approved"
+
+
+def test_a_refused_answer_surfaces_the_detail_leaves_the_item_parked_and_is_not_retried(
+        parked_item):
+    stub, manager, inbox_id, client = parked_item
+    detail = "answers refused, nothing sealed: field 'requested_units' must be int"
+    stub.answer_response = _refused(422, detail)
+    response = client.post(f"/v1/inbox/{inbox_id}/input", json={"answers": ANSWERS})
+    assert response.status_code == 422
+    assert response.json()["detail"] == detail
+    assert stub.calls.count(f"POST /api/runs/{RUN}/input") == 1
+    data = manager.inbox.get(inbox_id).data
+    assert data["awaiting_input"] is True
+    assert data["pending_input"] == GATE
+    assert manager.runs.get(inbox_id)["state"] == "gate"
