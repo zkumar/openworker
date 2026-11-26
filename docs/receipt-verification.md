@@ -61,3 +61,15 @@ The digest sits **inside the envelope payload** the human signs. Fabric owns the
 Against an older fabric without the endpoint the digest post fails quietly (never retried on a
 4xx) and the receipt stays at Level 1 — locally verifiable, not chain-sealed. The item records
 which happened (`receipt_digest_recorded`).
+
+## Reading `evidence.chain_head` in the receipt
+
+`evidence.chain_head` and each `steps[].sha256` are frozen at signing: they are what the
+approver reviewed at the gate (the truncated display hashes, with the chain head as it stood
+before the decision envelope), not the final sealed head. The signature appends the decision
+envelope after the digest is computed, so the final head cannot live inside the signed body
+without changing under its own signature. For verification, use `integrity.envelope_sha256`,
+the full 64-character hash of the signed decision envelope, against `GET /api/runs/{run}/chain`.
+Under `OPENWORKER_EXECUTOR=temporal` the full final `chain_head` is additionally sealed into
+the run-completing rfsdk envelope (OW-F-014); by design it is anchor data in that envelope
+only, never a field of the signed receipt body.
